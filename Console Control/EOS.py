@@ -15,7 +15,7 @@ class EOS(object):
         self.port = port
         self.client = udp_client.SimpleUDPClient(ip, port)
 
-    def send(self, message: str, value: str or int or float) -> None:
+    def send(self, message: str, value: str or int or float):   
         self.client.send_message(message, value)
 
     def set_intensity(self, channel: int, value: float) -> None:

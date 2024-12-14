@@ -5,6 +5,12 @@ import adafruit_tsl2591
 import asyncio
 import websockets
 import json
+from dotenv import load_dotenv
+import os
+
+load_dotenv('.env')
+
+sensorId = os.getenv("SENSOR_ID")
 
 # Create sensor object, communicating over the board's default I2C bus
 i2c = board.I2C()  # uses board.SCL and board.SDA
@@ -25,6 +31,7 @@ async def send(websocket, value, sensorId):
 
 
 async def main():
+    print("setting up sensor with ID: ", sensorId)
     uri = "ws://192.168.1.102:8765/ws"  # Ensure this matches your server's route
     try:
         # Open the WebSocket connection once and keep it open
@@ -39,7 +46,7 @@ async def main():
                     visible = sensor.visible
 
                     # Send the lux value via WebSocket
-                    await send(websocket, visible, sensorId=2)
+                    await send(websocket, visible, sensorId=sensorId)
 
                     # Print readings for debugging
                     print(f"Lux: {lux}, Infrared: {infrared}, Visible: {visible}")

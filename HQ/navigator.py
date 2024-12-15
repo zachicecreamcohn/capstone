@@ -5,6 +5,7 @@ from gevent import sleep
 
 class Phase(Enum):
     EXPLORATORY = "exploratory"
+    EXPLORATORY_FAILED = "exploratory_failed"
     DIRECTED = "directed"
     VERIFICATION = "verification"
     COMPLETE = "complete"
@@ -13,8 +14,9 @@ class Phase(Enum):
 
 class Navigator:
     def __init__(self, sensors_data, persisted_state=None):
-        self.step_size = 2
-        self.tolerance = 0.1
+        self.step_size = 2  # TODO Determine if this is necessary here
+        self.tolerance = 0.1  # TODO Determine if this is necessary here
+
         self.pan = 50
         self.tilt = 60.0
         self.sensors_data = sensors_data
@@ -30,63 +32,90 @@ class Navigator:
         self.target_sensor = persisted_state.get("target_sensor", None) if persisted_state else None
         self.previous_intensity = persisted_state.get("previous_intensity", -1) if persisted_state else -1
 
-    def send_light_command(self, pan, tilt):
-        # TODO here is where i need to call/import a class that handles light movements
-        self.pan = pan
-        self.tilt = tilt
-        self.eos.set_pan(1, pan, "r2x") # TODO find another way to pass fixture type
-        self.eos.set_tilt(1, tilt, "r2x") # TODO find another way to pass fixture type
-
+    def send_light_command(self, pan_move, tilt_move, use_degrees=False):
+        self.eos.set_pan(1, self.pan, pan_move, "r1", use_degrees)
+        self.eos.set_tilt(1, self.tilt, tilt_move, "r1", use_degrees)
+        self.pan += pan_move
+        self.tilt += tilt_move
 
     def exploratory_phase(self):
-        radius = self.tilt
-        direction = 1
+        pan_min, pan_max = self.eos.get_pan_range("r1")
+        tilt_min, tilt_max = self.eos.get_tilt_range("r1")
 
-        # Incrementally perform the exploratory sweep
-        radius += self.step_size
-        if radius > 100 or radius < 0:
+        # Start with no tilt (0) and tilt down (toward tilt_min) as we go
+        give_up_tilt = 85
+        search_tilt_max = 0
+        search_tilt_min = tilt_min
+
+        pan_step = 10.0
+        tilt_step = 5.0
+        threshold = 0.2
+
+        if self.target_sensor is None:
+            self.target_sensor = 1
+
+        if self.previous_intensity == -1:
+            self.previous_intensity = self.sensors_data[self.target_sensor]
+
+        if not hasattr(self, "scan_pan"):
+            self.scan_pan = pan_min
+        if not hasattr(self, "scan_tilt"):
+            self.scan_tilt = search_tilt_max
+
+        # Keep track of pan direction
+        if not hasattr(self, "pan_direction"):
+            self.pan_direction = 1
+
+        self.eos.set_pan(1, 0, self.scan_pan, "r1", use_degrees=True)
+        self.eos.set_tilt(1, 0, self.scan_tilt, "r1", use_degrees=True)
+        self.pan = self.scan_pan
+        self.tilt = self.scan_tilt
+
+        current_intensity = self.sensors_data[self.target_sensor]
+
+        print(f"Current intensity of sensor {self.target_sensor}: {current_intensity}")
+
+        if current_intensity > self.previous_intensity + threshold:
             return Phase.DIRECTED
 
-        for pan in np.arange(00, 100 + direction, direction * self.step_size):
-            self.send_light_command(pan, radius)
-            # sleep 1 second
-            sleep(0.05)
-            if self.detect_significant_change():
-                return Phase.DIRECTED
+        # Move pan
+        self.scan_pan += pan_step * self.pan_direction
+
+        if self.pan_direction == 1 and self.scan_pan > pan_max:
+            self.scan_pan = pan_max
+            self.pan_direction = -1
+            self.scan_tilt -= tilt_step
+            if self.scan_tilt < search_tilt_min:
+                # Done scanning
+                pass
+        elif self.pan_direction == -1 and self.scan_pan < pan_min:
+            self.scan_pan = pan_min
+            self.pan_direction = 1
+            self.scan_tilt -= tilt_step
+            if self.scan_tilt < search_tilt_min:
+                # Done scanning
+                pass
+
+        if abs(self.scan_tilt) >= give_up_tilt:
+            # give up
+            self.eos.set_pan(1, 0, 0, "r1", use_degrees=True)
+            self.eos.set_tilt(1, 0, 0, "r1", use_degrees=True)
+            self.eos.set_intensity(1, 0)
+            return Phase.EXPLORATORY_FAILED
 
         return Phase.EXPLORATORY
 
-    def detect_significant_change(self):
-        for sensor, intensity in self.sensors_data.items():
-            if intensity > self.tolerance:
-                self.target_sensor = sensor
-                return True
-        return False
-
     def directed_phase(self):
-        target_intensity = self.sensors_data.get(self.target_sensor, 0)
-
-        if target_intensity <= self.previous_intensity:
-            return Phase.VERIFICATION
-
-        self.pan += self.step_size * (1 if target_intensity > self.previous_intensity else -1)
-        self.tilt += self.step_size * (1 if target_intensity > self.previous_intensity else -1)
-
-        self.send_light_command(self.pan, self.tilt)
-        self.previous_intensity = target_intensity
-
+        # TODO: Implement directed phase
         return Phase.DIRECTED
 
     def verification_phase(self):
-        directions = [(self.step_size, 0), (-self.step_size, 0), (0, self.step_size), (0, -self.step_size)]
-        initial_intensity = self.sensors_data.get(self.target_sensor, 0)
-
-        for d_pan, d_tilt in directions:
-            self.send_light_command(self.pan + d_pan, self.tilt + d_tilt)
-            if self.sensors_data.get(self.target_sensor, 0) >= initial_intensity:
-                return Phase.VERIFICATION_FAILED
-
+        # TODO: Implement verification phase
         return Phase.COMPLETE
+
+    def detect_significant_change(self):
+        # TODO: Implement detect_significant_change
+        return False
 
     def execute(self):
         # print the current phase

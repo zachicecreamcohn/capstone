@@ -38,7 +38,9 @@ async def main():
                         await send(websocket, visible, sensorId=sensorId)
                     except Exception as e:
                         print(f"Error reading sensor or sending data: {e}")
-                    await asyncio.sleep(1)
+                        # attempt to reconnect
+                        break
+                    await asyncio.sleep(0.01)
         except Exception as e:
             print(f"WebSocket connection failed: {e}")
             print("Retrying connection in 5 seconds...")

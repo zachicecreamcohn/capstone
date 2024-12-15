@@ -18,6 +18,8 @@ class LightControlApp:
         spawn(self.navigator_loop)
 
     def add_sensor_reading(self, sensor_ID, intensity):
+        sensor_ID = int(sensor_ID)  # Convert to integer
+        intensity = float(intensity)  # Normalize intensity
         with self.lock:
             if sensor_ID in self.sensor_data:
                 self.buffers[sensor_ID].append(intensity)
@@ -30,18 +32,25 @@ class LightControlApp:
                         avg_intensity = sum(buffer) / len(buffer)
                         self.sensor_data[sensor_ID] = avg_intensity
                         self.buffers[sensor_ID] = []
+                        print(f"Updated intensity of sensor {sensor_ID}: {avg_intensity}")
+
+                # Log the current intensity of sensor 1 only once after updates
+                print(f"Current intensity of sensor 1 (debounced): {self.sensor_data[1]}")
+
             sleep(self.debounce_interval)
 
     def navigator_loop(self):
         while True:
             with self.lock:
+                print(f"Sensor data before passing to Navigator: {self.sensor_data}")
                 sensor_data_copy = self.sensor_data.copy()
 
             if self.navigator is None:
                 self.navigator = Navigator(sensor_data_copy, persisted_state=self.navigator_state)
+            else:
+                self.navigator.sensors_data = sensor_data_copy
 
             self.navigator_state = self.navigator.execute()
-
 
             if self.navigator_state["current_phase"] == Phase.COMPLETE.name:
                 print(f"Navigator completed: pan={self.navigator_state['pan']}, tilt={self.navigator_state['tilt']}")
@@ -50,8 +59,8 @@ class LightControlApp:
                 print("Exploratory phase failed")
                 break
 
-            else:
-                print(f"Phase : {self.navigator_state['current_phase']}")
+            # Avoid redundant logging by consolidating `Current intensity` logs
+            print(f"Phase : {self.navigator_state['current_phase']}")
 
             sleep(self.debounce_interval)
 
@@ -65,20 +74,24 @@ class LightControlApp:
             try:
                 message = ws.receive()
                 if message is None:
+                    print("No message received. Closing connection.")
                     break
 
                 json_data = json.loads(message)
-                if "sensorID" in json_data and "intensity" in json_data:
-                    self.add_sensor_reading(json_data["sensorID"], json_data["intensity"])
+                if "sensorId" in json_data and "value" in json_data:
+                    sensor_ID = int(json_data["sensorId"])
+                    value = float(json_data["value"])
+                    print(f"Received sensor reading: sensorId={sensor_ID}, value={value}")
+                    self.add_sensor_reading(sensor_ID, value)
                 else:
-                    ws.send(json.dumps({"error": "Invalid data format. Expected {'sensorID': 1, 'intensity': 0.5}"}))
+                    print("Invalid data format. Expected {'sensorId': 1, 'value': 0.5}")
+                    ws.send(json.dumps({"error": "Invalid data format. Expected {'sensorId': 1, 'value': 0.5}"}))
             except json.JSONDecodeError:
                 ws.send(json.dumps({"error": "Invalid JSON format"}))
             except Exception as e:
                 ws.send(json.dumps({"error": f"Server error: {str(e)}"}))
 
         return []
-
 
 if __name__ == '__main__':
     app = LightControlApp(debounce_interval=0.2)

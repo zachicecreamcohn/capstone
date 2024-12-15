@@ -118,8 +118,6 @@ class Navigator:
         return False
 
     def execute(self):
-        # print the current phase
-        print(f"Phase : {self.current_phase.name}")
 
         if self.current_phase == Phase.EXPLORATORY:
             self.current_phase = self.exploratory_phase()

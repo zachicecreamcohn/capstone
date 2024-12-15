@@ -1,67 +1,55 @@
+from enum import Enum
 import numpy as np
 
-class Navigator:
-    def __init__(self, flask_backend, step_size=1.0, tolerance=0.1):
-        """
-        Initialize the Navigator.
+class Phase(Enum):
+    EXPLORATORY = "exploratory"
+    DIRECTED = "directed"
+    VERIFICATION = "verification"
+    COMPLETE = "complete"
+    VERIFICATION_FAILED = "verification_failed"
 
-        :param flask_backend: The Flask backend providing sensor data and accepting light control commands.
-        :param step_size: Percentage increment for pan/tilt during exploration.
-        :param tolerance: Intensity change threshold for significant detection.
-        """
-        self.backend = flask_backend
-        self.step_size = step_size
-        self.tolerance = tolerance
-        self.pan = 50.0  # Start at home position
+
+class Navigator:
+    def __init__(self, sensors_data, persisted_state=None):
+        self.step_size = 0.1
+        self.tolerance = 0.1
+        self.pan = 50.0
         self.tilt = 50.0
-        self.sensors_data = None  # Updated with real-time sensor data
+        self.sensors_data = sensors_data
         self.target_sensor = None
 
-    def get_sensor_data(self):
-        """
-        Fetch the latest sensor data from the Flask backend.
-        """
-        self.sensors_data = self.backend.get_sensor_data()
-        return self.sensors_data
+        # Restore persisted state
+        self.current_phase = (
+            Phase[persisted_state.get("current_phase")] if persisted_state else Phase.EXPLORATORY
+        )
+        self.pan = persisted_state.get("pan", 50.0) if persisted_state else 50.0
+        self.tilt = persisted_state.get("tilt", 50.0) if persisted_state else 50.0
+        self.target_sensor = persisted_state.get("target_sensor", None) if persisted_state else None
+        self.previous_intensity = persisted_state.get("previous_intensity", -1) if persisted_state else -1
 
     def send_light_command(self, pan, tilt):
-        """
-        Send the pan and tilt command to the light fixture via the Flask backend.
-
-        :param pan: Pan percentage (0-100).
-        :param tilt: Tilt percentage (0-100).
-        """
-        self.backend.send_light_command(pan, tilt)
+        # TODO here is where i need to call/import a class that handles light movements
+        print(f"Sending light to pan: {pan}, tilt: {tilt}")
         self.pan = pan
         self.tilt = tilt
 
     def exploratory_phase(self):
-        """
-        Perform exploratory phase using concentric circles.
-        """
         radius = self.tilt
-        direction = 1  # Start moving pan in the increasing direction
+        direction = 1
 
-        while True:
-            # Increase tilt to expand the circle's radius
-            radius += self.step_size
-            if radius > 100 or radius < 0:
-                break  # Stop if tilt goes out of range
+        # Incrementally perform the exploratory sweep
+        radius += self.step_size
+        if radius > 100 or radius < 0:
+            return Phase.DIRECTED
 
-            # Sweep pan from 50 to 100 or back to 50
-            for pan in np.arange(50, 100 + direction, direction * self.step_size):
-                self.send_light_command(pan, radius)
-                self.get_sensor_data()
-                if self.detect_significant_change():
-                    return
+        for pan in np.arange(50, 100 + direction, direction * self.step_size):
+            self.send_light_command(pan, radius)
+            if self.detect_significant_change():
+                return Phase.DIRECTED
 
-            # Reverse direction of pan
-            direction *= -1
+        return Phase.EXPLORATORY
 
     def detect_significant_change(self):
-        """
-        Check if there's a significant change in any sensor's intensity.
-        """
         for sensor, intensity in self.sensors_data.items():
             if intensity > self.tolerance:
                 self.target_sensor = sensor
@@ -69,52 +57,44 @@ class Navigator:
         return False
 
     def directed_phase(self):
-        """
-        Perform directed phase to dynamically guide the light.
-        """
-        previous_intensity = -1
+        target_intensity = self.sensors_data.get(self.target_sensor, 0)
 
-        while True:
-            self.get_sensor_data()
-            target_intensity = self.sensors_data[self.target_sensor]
+        if target_intensity <= self.previous_intensity:
+            return Phase.VERIFICATION
 
-            if target_intensity <= previous_intensity:
-                break  # Stop if intensity does not improve
+        self.pan += self.step_size * (1 if target_intensity > self.previous_intensity else -1)
+        self.tilt += self.step_size * (1 if target_intensity > self.previous_intensity else -1)
 
-            # Adjust pan and tilt dynamically
-            self.pan += self.step_size * (1 if target_intensity > previous_intensity else -1)
-            self.tilt += self.step_size * (1 if target_intensity > previous_intensity else -1)
+        self.send_light_command(self.pan, self.tilt)
+        self.previous_intensity = target_intensity
 
-            self.send_light_command(self.pan, self.tilt)
-            previous_intensity = target_intensity
+        return Phase.DIRECTED
 
     def verification_phase(self):
-        """
-        Perform verification phase to ensure the light is correctly pointed.
-        """
         directions = [(self.step_size, 0), (-self.step_size, 0), (0, self.step_size), (0, -self.step_size)]
-        initial_intensity = self.sensors_data[self.target_sensor]
+        initial_intensity = self.sensors_data.get(self.target_sensor, 0)
 
         for d_pan, d_tilt in directions:
             self.send_light_command(self.pan + d_pan, self.tilt + d_tilt)
-            self.get_sensor_data()
-            if self.sensors_data[self.target_sensor] >= initial_intensity:
-                return False  # If intensity increases, it is not pointing correctly
+            if self.sensors_data.get(self.target_sensor, 0) >= initial_intensity:
+                return Phase.VERIFICATION_FAILED
 
-        return True
+        return Phase.COMPLETE
 
     def execute(self):
-        """
-        Execute the full algorithm.
-        """
-        # Phase 1: Exploratory
-        self.exploratory_phase()
+        if self.current_phase == Phase.EXPLORATORY:
+            self.current_phase = self.exploratory_phase()
 
-        # Phase 2: Directed
-        self.directed_phase()
+        if self.current_phase == Phase.DIRECTED:
+            self.current_phase = self.directed_phase()
 
-        # Phase 3: Verification
-        if self.verification_phase():
-            return self.pan, self.tilt  # Final position of the light
-        else:
-            raise Exception("Verification failed. The light is not pointing at the sensor.")
+        if self.current_phase == Phase.VERIFICATION:
+            self.current_phase = self.verification_phase()
+
+        return {
+            "current_phase": self.current_phase.name,
+            "pan": self.pan,
+            "tilt": self.tilt,
+            "target_sensor": self.target_sensor,
+            "previous_intensity": self.previous_intensity,
+        }

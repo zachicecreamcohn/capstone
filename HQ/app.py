@@ -42,11 +42,14 @@ class LightControlApp:
 
             self.navigator_state = self.navigator.execute()
 
+
             if self.navigator_state["current_phase"] == Phase.COMPLETE.name:
                 print(f"Navigator completed: pan={self.navigator_state['pan']}, tilt={self.navigator_state['tilt']}")
                 break
+            else:
+                print(f"Phase : {self.navigator_state['current_phase']}")
 
-            sleep(0.1)
+            sleep(1)
 
     def websocket_handler(self, environ, start_response):
         ws = environ.get('wsgi.websocket')

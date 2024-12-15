@@ -1,5 +1,7 @@
 from enum import Enum
 import numpy as np
+from EOS import EOS
+from gevent import sleep
 
 class Phase(Enum):
     EXPLORATORY = "exploratory"
@@ -11,12 +13,13 @@ class Phase(Enum):
 
 class Navigator:
     def __init__(self, sensors_data, persisted_state=None):
-        self.step_size = 0.1
+        self.step_size = 2
         self.tolerance = 0.1
-        self.pan = 50.0
-        self.tilt = 50.0
+        self.pan = 50
+        self.tilt = 60.0
         self.sensors_data = sensors_data
         self.target_sensor = None
+        self.eos= EOS("192.168.1.105", 8000)
 
         # Restore persisted state
         self.current_phase = (
@@ -29,9 +32,11 @@ class Navigator:
 
     def send_light_command(self, pan, tilt):
         # TODO here is where i need to call/import a class that handles light movements
-        print(f"Sending light to pan: {pan}, tilt: {tilt}")
         self.pan = pan
         self.tilt = tilt
+        self.eos.set_pan(1, pan, "r2x") # TODO find another way to pass fixture type
+        self.eos.set_tilt(1, tilt, "r2x") # TODO find another way to pass fixture type
+
 
     def exploratory_phase(self):
         radius = self.tilt
@@ -42,8 +47,10 @@ class Navigator:
         if radius > 100 or radius < 0:
             return Phase.DIRECTED
 
-        for pan in np.arange(50, 100 + direction, direction * self.step_size):
+        for pan in np.arange(00, 100 + direction, direction * self.step_size):
             self.send_light_command(pan, radius)
+            # sleep 1 second
+            sleep(0.05)
             if self.detect_significant_change():
                 return Phase.DIRECTED
 
@@ -82,6 +89,9 @@ class Navigator:
         return Phase.COMPLETE
 
     def execute(self):
+        # print the current phase
+        print(f"Phase : {self.current_phase.name}")
+
         if self.current_phase == Phase.EXPLORATORY:
             self.current_phase = self.exploratory_phase()
 

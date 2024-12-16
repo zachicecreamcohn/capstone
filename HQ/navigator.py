@@ -38,9 +38,8 @@ class Navigator:
         self.eos.set_intensity(1, 100)
         sleep(0.5)  # Reduced sleep for quicker updates
 
-        with self.lock:
-            self.best_intensity = self.sensor_data.get(self.target_sensor, {}).get("intensity", 0)
-            logging.debug(f"Setup complete. Baseline intensity: {self.best_intensity}")
+        self.best_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
+        logging.debug(f"Setup complete. Baseline intensity: {self.best_intensity}")
 
         return Phase.EXPLORE
 

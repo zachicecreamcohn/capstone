@@ -21,10 +21,11 @@ class LightControlApp:
         self.debounce_interval = debounce_interval
         self.debounce_enabled = debounce_enabled
         self.gui = None
-        # Pass sensor_data and lock to Navigator
-        self.navigator = Navigator(sensor_data=self.sensor_data, lock=self.lock)
-
         spawn(self.run_gui)
+        sleep(1)  # wait for gui to start
+        # Pass sensor_data and lock to Navigator
+        self.navigator = Navigator(sensor_data=self.sensor_data, gui=self.gui, lock=self.lock)
+
         spawn(self.debounce_loop)
         spawn(self.navigator_loop)
 

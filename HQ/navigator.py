@@ -22,6 +22,7 @@ class Navigator:
         self.best_intensity = -1
         self.target_sensor = 1
         self.target_sensor_previous_intensity = -1
+        self.sensor_baselines = {}
         self.sensor_data = sensor_data
         self.lock = lock
 
@@ -35,8 +36,13 @@ class Navigator:
 
     def setup_phase(self):
         logging.info("Entering SETUP phase.")
+        self.eos.set_pan(1, 0, 0, "r1", use_degrees=True)
+        self.eos.set_tilt(1, 0, 0, "r1", use_degrees=True)
         self.eos.set_intensity(1, 100)
-        sleep(0.5)  # Reduced sleep for quicker updates
+        sleep(5)  # Reduced sleep for quicker updates
+        # set baselines
+        self.sensor_baselines = self.get_new_data()
+        logging.info(f"Sensor baselines: {self.sensor_baselines}")
 
         self.best_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
         logging.debug(f"Setup complete. Baseline intensity: {self.best_intensity}")
@@ -51,7 +57,7 @@ class Navigator:
         max_tilt = self.eos.get_tilt_range("r1")[1]
         min_pan, max_pan = self.eos.get_pan_range("r1")
         pan_move_step = 5
-        tilt_move_step = 5
+        tilt_move_step = 10
 
 
 
@@ -73,10 +79,11 @@ class Navigator:
                 self.eos.set_tilt(1,0,scan_tilt, "r1", use_degrees=True)
                 self.pan = scan_pan
                 self.tilt = scan_tilt
-                sleep(0.05)
+                sleep(0.2)
                 intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
-
-                if intensity > self.target_sensor_previous_intensity+1000000:
+                logging.info(f"Intensity: {intensity}")
+                logging.info(f"Previous Intensity: {self.target_sensor_previous_intensity}")
+                if intensity > self.sensor_baselines.get(self.target_sensor, {}).get("intensity", 0) + 10000000:
                     return Phase.COMPLETE
 
                 self.target_sensor_previous_intensity = intensity

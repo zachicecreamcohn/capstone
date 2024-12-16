@@ -1,68 +1,82 @@
 import json
-from gevent import pywsgi
+import tkinter as tk
+from gevent import pywsgi, sleep, spawn
 from geventwebsocket.handler import WebSocketHandler
 from collections import defaultdict
-from gevent import sleep, spawn
 from gevent.lock import Semaphore
 from navigator import Navigator, Phase
+from GUI import SensorGUI
+import logging
 
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# disable loggin for debuging
+logging.disable(logging.DEBUG)
 class LightControlApp:
-    def __init__(self, debounce_interval=0.2):
+    def __init__(self, debounce_interval=0.1, debounce_enabled=True):
         self.sensor_data = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         self.buffers = defaultdict(list)
         self.lock = Semaphore()
         self.debounce_interval = debounce_interval
-        self.navigator_state = None
-        self.navigator = None
+        self.debounce_enabled = debounce_enabled
+        self.gui = None
+        # Pass sensor_data and lock to Navigator
+        self.navigator = Navigator(sensor_data=self.sensor_data, lock=self.lock)
+
+        spawn(self.run_gui)
         spawn(self.debounce_loop)
         spawn(self.navigator_loop)
 
+    def run_gui(self):
+        root = tk.Tk()
+        self.gui = SensorGUI(root)
+        try:
+            while True:
+                root.update_idletasks()
+                root.update()
+                sleep(0.01)
+        except tk.TclError:
+            logging.info("GUI closed.")
+
     def add_sensor_reading(self, sensor_ID, intensity):
-        sensor_ID = int(sensor_ID)  # Convert to integer
-        intensity = float(intensity)  # Normalize intensity
+        sensor_ID = int(sensor_ID)
+        intensity = float(intensity)
         with self.lock:
-            if sensor_ID in self.sensor_data:
+            if self.debounce_enabled:
                 self.buffers[sensor_ID].append(intensity)
+                logging.debug(f"Added intensity {intensity} to buffer for sensor {sensor_ID}")
+            else:
+                self.sensor_data[sensor_ID] = intensity
+                logging.debug(f"Set intensity {intensity} for sensor {sensor_ID}")
 
     def debounce_loop(self):
         while True:
             with self.lock:
-                for sensor_ID, buffer in self.buffers.items():
-                    if buffer:
-                        avg_intensity = sum(buffer) / len(buffer)
-                        self.sensor_data[sensor_ID] = avg_intensity
-                        self.buffers[sensor_ID] = []
-                        print(f"Updated intensity of sensor {sensor_ID}: {avg_intensity}")
-
-                # Log the current intensity of sensor 1 only once after updates
-                print(f"Current intensity of sensor 1 (debounced): {self.sensor_data[1]}")
-
+                if self.debounce_enabled:
+                    for sensor_ID, buffer in self.buffers.items():
+                        if buffer:
+                            avg_intensity = sum(buffer) / len(buffer)
+                            self.sensor_data[sensor_ID] = avg_intensity
+                            logging.debug(f"Debounced sensor {sensor_ID}: {avg_intensity}")
+                            self.buffers[sensor_ID] = []
             sleep(self.debounce_interval)
 
     def navigator_loop(self):
+        sleep(1)  # Shortened wait for quicker startup
+        logging.info("Navigator loop started.")
+
         while True:
-            with self.lock:
-                print(f"Sensor data before passing to Navigator: {self.sensor_data}")
-                sensor_data_copy = self.sensor_data.copy()
+            # Execute Navigator with access to live sensor_data
+            navigator_state = self.navigator.execute()
+            logging.info(f"Navigator state: {navigator_state}")
 
-            if self.navigator is None:
-                self.navigator = Navigator(sensor_data_copy, persisted_state=self.navigator_state)
+            current_phase = navigator_state["current_phase"]
+            if current_phase in ["COMPLETE", "FAILED"]:
+                logging.info(f"Navigator {current_phase.lower()}. Waiting for new data...")
+                sleep(5)
             else:
-                self.navigator.sensors_data = sensor_data_copy
-
-            self.navigator_state = self.navigator.execute()
-
-            if self.navigator_state["current_phase"] == Phase.COMPLETE.name:
-                print(f"Navigator completed: pan={self.navigator_state['pan']}, tilt={self.navigator_state['tilt']}")
-                break
-            elif self.navigator_state["current_phase"] == Phase.EXPLORATORY_FAILED.name:
-                print("Exploratory phase failed")
-                break
-
-            # Avoid redundant logging by consolidating `Current intensity` logs
-            print(f"Phase : {self.navigator_state['current_phase']}")
-
-            sleep(self.debounce_interval)
+                sleep(0.1)
 
     def websocket_handler(self, environ, start_response):
         ws = environ.get('wsgi.websocket')
@@ -70,32 +84,42 @@ class LightControlApp:
             start_response('400 Bad Request', [('Content-Type', 'text/plain')])
             return [b'WebSocket connection expected']
 
-        while True:
-            try:
+        logging.info("WebSocket connection established.")
+        try:
+            while True:
                 message = ws.receive()
                 if message is None:
-                    print("No message received. Closing connection.")
+                    logging.info("WebSocket connection closed by client.")
                     break
 
-                json_data = json.loads(message)
-                if "sensorId" in json_data and "value" in json_data:
-                    sensor_ID = int(json_data["sensorId"])
-                    value = float(json_data["value"])
-                    print(f"Received sensor reading: sensorId={sensor_ID}, value={value}")
-                    self.add_sensor_reading(sensor_ID, value)
-                else:
-                    print("Invalid data format. Expected {'sensorId': 1, 'value': 0.5}")
-                    ws.send(json.dumps({"error": "Invalid data format. Expected {'sensorId': 1, 'value': 0.5}"}))
-            except json.JSONDecodeError:
-                ws.send(json.dumps({"error": "Invalid JSON format"}))
-            except Exception as e:
-                ws.send(json.dumps({"error": f"Server error: {str(e)}"}))
-
+                logging.debug(f"Received message: {message}")
+                try:
+                    json_data = json.loads(message)
+                    if "sensorId" in json_data and "value" in json_data:
+                        sensor_ID = int(json_data["sensorId"])
+                        value = float(json_data["value"])
+                        self.add_sensor_reading(sensor_ID, value)
+                        logging.debug(f"Updated sensor_data: {self.sensor_data}")
+                    else:
+                        error_msg = "Invalid data format."
+                        logging.warning(error_msg)
+                        ws.send(json.dumps({"error": error_msg}))
+                except json.JSONDecodeError:
+                    error_msg = "Invalid JSON format."
+                    logging.warning(error_msg)
+                    ws.send(json.dumps({"error": error_msg}))
+                except Exception as e:
+                    error_msg = f"Server error: {str(e)}"
+                    logging.error(error_msg)
+                    ws.send(json.dumps({"error": error_msg}))
+        except Exception as e:
+            logging.error(f"WebSocket handler error: {str(e)}")
+        finally:
+            logging.info("WebSocket connection handler terminating.")
         return []
 
 if __name__ == '__main__':
-    app = LightControlApp(debounce_interval=0.2)
+    app = LightControlApp(debounce_interval=0.1)
     server = pywsgi.WSGIServer(('0.0.0.0', 8765), app.websocket_handler, handler_class=WebSocketHandler)
-
-    print("WebSocket server running on ws://0.0.0.0:8765")
+    logging.info("WebSocket server running on ws://0.0.0.0:8765")
     server.serve_forever()

@@ -39,7 +39,7 @@ class Navigator:
         sleep(0.5)  # Reduced sleep for quicker updates
 
         with self.lock:
-            self.best_intensity = self.sensor_data.get(self.target_sensor, 0)
+            self.best_intensity = self.sensor_data.get(self.target_sensor, {}).get("intensity", 0)
             logging.debug(f"Setup complete. Baseline intensity: {self.best_intensity}")
 
         return Phase.EXPLORE
@@ -57,15 +57,13 @@ class Navigator:
 
 
         if self.target_sensor_previous_intensity == -1:
-            self.target_sensor_previous_intensity = self.get_new_data().get(self.target_sensor, 0)
+            self.target_sensor_previous_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
 
         self.send_light_command(min_pan, 0, use_degrees=True)
 
-        current_intensity = self.get_new_data().get(self.target_sensor, 0)
 
         scan_pan = min_pan
         scan_tilt = 0
-        radius=self.tilt
         direction = 1
         give_up_tilt = 85
         found = False
@@ -77,7 +75,7 @@ class Navigator:
                 self.pan = scan_pan
                 self.tilt = scan_tilt
                 sleep(0.05)
-                intensity = self.get_new_data().get(self.target_sensor, 0)
+                intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
 
                 if intensity > self.target_sensor_previous_intensity+1000000:
                     return Phase.COMPLETE
@@ -116,14 +114,14 @@ class Navigator:
         logging.info("Entering OPTIMIZE phase.")
 
 
-        initial_intensity = self.get_new_data().get(self.target_sensor, 0)
+        initial_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
 
         self.send_light_command(pan_move=5, tilt_move=5)  # Example move
         self.eos.set_intensity(1, 0)
         logging.debug("Light intensity set to 0.")
         sleep(0.5)  # Adjust based on sensor response time
 
-        updated_intensity = self.get_new_data().get(self.target_sensor, 0)
+        updated_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
 
         if initial_intensity != updated_intensity:
             logging.info("They are not equal")
@@ -135,8 +133,20 @@ class Navigator:
 
     def get_new_data(self):
         new_sensor_data = {}
+
         with self.lock:
             new_sensor_data = self.sensor_data.copy()
+
+        # now, combine it with the GUI coords
+        # right now, the sensor data is in {sensor_id: intensity} format. it needs to be in {sensor_id: {intensity: intensity, x: x, y: y}} format
+        if self.gui is not None:
+            sensor_positions = self.gui.get_sensor_positions()
+            for sensor_id, intensity in new_sensor_data.items():
+                new_sensor_data[sensor_id] = {
+                    "intensity": intensity,
+                    "x": sensor_positions[sensor_id][0],
+                    "y": sensor_positions[sensor_id][1],
+                }
         return new_sensor_data
 
     def execute(self):

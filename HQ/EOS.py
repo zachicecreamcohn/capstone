@@ -5,9 +5,11 @@ fixture_data = {
     "r1": {
         "pan": (-270, 270),
         "tilt": (-115, 115),
-        "zoom": (12,49)
+        "zoom": (12,49),
     }
 }
+
+current_data = {}
 
 class EOS(object):
     def __init__(self, ip: str, port: int) -> None:
@@ -39,6 +41,10 @@ class EOS(object):
             pan_min, pan_max = fixture_data[fixture_name]["pan"]
             actual_pan_value = self._convert_value(move_value, use_degrees, pan_min, pan_max, current_value)
             self.set_parameter(channel, "pan", actual_pan_value)
+            if channel not in current_data:
+                current_data[channel] = {}
+
+            current_data[channel]["pan"] = actual_pan_value
         else:
             raise ValueError(f"Fixture '{fixture_name}' not found in fixture_data")
 
@@ -47,6 +53,10 @@ class EOS(object):
             tilt_min, tilt_max = fixture_data[fixture_name]["tilt"]
             actual_tilt_value = self._convert_value(move_value, use_degrees, tilt_min, tilt_max, current_value)
             self.set_parameter(channel, "tilt", actual_tilt_value)
+            if channel not in current_data:
+                current_data[channel] = {}
+
+            current_data[channel]["tilt"] = actual_tilt_value
         else:
             raise ValueError(f"Fixture '{fixture_name}' not found in fixture_data")
 
@@ -58,6 +68,12 @@ class EOS(object):
             self.set_parameter(channel, "zoom", actual_zoom_value)
         else:
             raise ValueError(f"Fixture '{fixture_name}' not found in fixture_data")
+
+    def get_pan(self, channel: int) -> float:
+        return current_data[channel]["pan"]
+
+    def get_tilt(self, channel: int) -> float:
+        return current_data[channel]["tilt"]
 
     def _convert_value(self, move_value: float, use_degrees: bool, min_value: float, max_value: float, current_value: float) -> float:
         if use_degrees:

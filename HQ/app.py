@@ -10,9 +10,9 @@ import logging
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# disable debug logging for this page
+logging.getLogger().setLevel(logging.INFO)
 
-# disable loggin for debuging
-logging.disable(logging.DEBUG)
 class LightControlApp:
     def __init__(self, debounce_interval=0.1, debounce_enabled=True):
         self.sensor_data = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
@@ -23,6 +23,7 @@ class LightControlApp:
         self.gui = None
         spawn(self.run_gui)
         sleep(1)  # wait for gui to start
+
         # Pass sensor_data and lock to Navigator
         self.navigator = Navigator(sensor_data=self.sensor_data, gui=self.gui, lock=self.lock)
 
@@ -77,7 +78,7 @@ class LightControlApp:
                 logging.info(f"Navigator {current_phase.lower()}. Waiting for new data...")
                 sleep(5)
             else:
-                sleep(0.1)
+                sleep(0.2)
 
     def websocket_handler(self, environ, start_response):
         ws = environ.get('wsgi.websocket')

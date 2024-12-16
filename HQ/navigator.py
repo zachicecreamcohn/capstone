@@ -15,6 +15,7 @@ logging.basicConfig(
 class Phase(Enum):
     SETUP = "setup"
     LOCATE = "locate"
+    OPTIMIZE = "optimize"
     COMPLETE = "complete"
     FAILED = "failed"
 
@@ -31,13 +32,17 @@ class Navigator:
         self.sensor_data = sensor_data if sensor_data is not None else {}
         self.lock = lock if lock is not None else Lock()
 
+        # parameters for locate phase
+        self.target_sensor_previous_intensity = -1
+
+
         # Parameters for centroid-based navigation
-        self.initial_step_size = 3.0  # degrees
+        self.initial_step_size = 15.0  # degrees
         self.step_size = self.initial_step_size  # Current step size
         self.min_step_size = 0.1  # Minimum step size for fine adjustments
         self.step_decrement = 0.5  # How much to reduce step size after certain steps
         self.max_steps = 1500  # Prevent infinite loops
-        self.tolerance = 1.0  # Centroid distance tolerance (units consistent with sensor positions)
+        self.tolerance = 2.0  # Centroid distance tolerance (units consistent with sensor positions)
 
         # Threshold to determine if sensor data is close to baseline
         self.baseline_threshold = 0.1  # Adjust as needed
@@ -114,6 +119,68 @@ class Navigator:
         return Phase.LOCATE
 
     def locate_phase(self):
+        # move in expanding concentric circles until the taret sensor picks up significant changes
+        logging.info("Entering EXPLORE phase.")
+
+        # Move the light in a spiral pattern
+        max_tilt = self.eos.get_tilt_range("r1")[1]
+        min_pan, max_pan = self.eos.get_pan_range("r1")
+        pan_move_step = 5
+        tilt_move_step = 10
+
+
+
+        if self.target_sensor_previous_intensity == -1:
+            self.target_sensor_previous_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
+
+        self.send_light_command(min_pan, 0, use_degrees=True)
+
+
+        scan_pan = min_pan
+        scan_tilt = 0
+        direction = 1
+        give_up_tilt = 85
+        found = False
+        while not found:
+            # set tilt
+            for i in range(0, max_pan, pan_move_step):
+                self.eos.set_pan(1,0,scan_pan, "r1", use_degrees=True)
+                self.eos.set_tilt(1,0,scan_tilt, "r1", use_degrees=True)
+                self.pan = scan_pan
+                self.tilt = scan_tilt
+                sleep(0.2)
+                intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
+                if intensity > self.sensor_baselines.get(self.target_sensor, {}).get("intensity", 0) + 1000000:
+                    return Phase.OPTIMIZE
+                else:
+                    logging.info(f"Intensity: {intensity}, Baseline: {self.sensor_baselines.get(self.target_sensor, {}).get('intensity', 0)}")
+
+                self.target_sensor_previous_intensity = intensity
+                scan_pan += pan_move_step * direction
+
+
+            if direction == 1 and scan_pan >= max_pan:
+                direction = -1
+                scan_pan = max_pan
+                scan_tilt += tilt_move_step
+                if scan_tilt > max_tilt:
+                    break
+            elif direction == -1 and scan_pan <= min_pan:
+                direction = 1
+                scan_pan = min_pan
+                scan_tilt += tilt_move_step
+                if scan_tilt > max_tilt:
+                    break
+            if (abs(scan_tilt) > give_up_tilt):
+                logging.info("Giving up")
+                self.eos.set_intensity(1, 0)
+                self.eos.set_pan(1, 0, 0, "r1", use_degrees=True)
+                self.eos.set_tilt(1, 0, 0, "r1", use_degrees=True)
+                return Phase.FAILED
+
+        return Phase.OPTIMIZE
+
+    def optimize_phase(self):
         """
         Implements the centroid-based algorithm to focus the light on the target sensor.
         Utilizes all sensors' data to compute the centroid and adjusts pan and tilt accordingly.
@@ -314,6 +381,8 @@ class Navigator:
             self.current_phase = self.setup_phase()
         elif self.current_phase == Phase.LOCATE:
             self.current_phase = self.locate_phase()
+        elif self.current_phase == Phase.OPTIMIZE:
+            self.current_phase = self.optimize_phase()
 
         status = {
             "current_phase": self.current_phase.name,

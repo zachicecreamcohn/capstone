@@ -79,6 +79,9 @@ class SensorGUI:
             sensor_positions[sensor_id] = (coords[0], coords[1])
         return sensor_positions
 
+    def get_gui_dimensions(self):
+        return self.canvas_width, self.canvas_height
+
     def reset_positions(self):
         # Reset sensor positions to their default locations
         default_positions = {

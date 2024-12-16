@@ -1,6 +1,6 @@
 from enum import Enum
+import json
 import numpy as np
-from EOS import EOS  # Ensure EOS module is correctly imported
 from gevent import sleep
 import logging
 from collections import deque
@@ -15,25 +15,22 @@ logging.basicConfig(
 class Phase(Enum):
     SETUP = "setup"
     LOCATE = "locate"
-    OPTIMIZE = "optimize"
     COMPLETE = "complete"
+    CALCULATE = "calculate"
     FAILED = "failed"
 
 class Navigator:
-    def __init__(self, eos_ip="192.168.1.105", eos_port=8000, gui=None, sensor_data=None, lock=None):
+    def __init__(self, eos=None, gui=None, sensor_data=None, lock=None):
         self.gui = gui
-        self.eos = EOS(eos_ip, eos_port)
+        self.eos = eos
         self.current_phase = Phase.SETUP
         self.pan = 0.0  # Current pan angle
         self.tilt = 0.0  # Current tilt angle
         self.best_intensity = -1
-        self.target_sensor = 1  # ID of the target sensor
         self.sensor_baselines = {}
         self.sensor_data = sensor_data if sensor_data is not None else {}
         self.lock = lock if lock is not None else Lock()
-
-        # parameters for locate phase
-        self.target_sensor_previous_intensity = -1
+        self.sensor_history = {}
 
 
         # Parameters for centroid-based navigation
@@ -52,7 +49,7 @@ class Navigator:
         self.sensor_history = {}
         if self.gui:
             sensor_ids = self.gui.get_sensor_ids()
-            self.sensor_history = {sensor_id: deque(maxlen=self.history_length) for sensor_id in sensor_ids}
+            self.sensor_history = {sensor_id: [] for sensor_id in sensor_ids}
         else:
             logging.error("GUI object is not provided. Sensor history cannot be initialized.")
 
@@ -97,7 +94,7 @@ class Navigator:
         and establishing sensor baselines.
         """
         logging.info("Entering SETUP phase.")
-        initial_pan, initial_tilt = -80, 0
+        initial_pan, initial_tilt = 0, 0
         self.send_light_command(initial_pan, initial_tilt)
         try:
             self.eos.set_intensity(1, 0)  # Set light intensity to a known value
@@ -112,7 +109,6 @@ class Navigator:
         logging.info(f"Sensor baselines: {self.sensor_baselines}")
 
         # Initialize best_intensity based on target sensor
-        self.best_intensity = self.sensor_baselines.get(self.target_sensor, {}).get("intensity", 0)
         self.eos.set_intensity(1, 100)
         logging.debug(f"Setup complete. Baseline intensity: {self.best_intensity}")
 
@@ -125,13 +121,8 @@ class Navigator:
         # Move the light in a spiral pattern
         max_tilt = self.eos.get_tilt_range("r1")[1]
         min_pan, max_pan = self.eos.get_pan_range("r1")
-        pan_move_step = 5
-        tilt_move_step = 10
-
-
-
-        if self.target_sensor_previous_intensity == -1:
-            self.target_sensor_previous_intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
+        pan_move_step = 1
+        tilt_move_step = 1
 
         self.send_light_command(min_pan, 0, use_degrees=True)
 
@@ -139,23 +130,23 @@ class Navigator:
         scan_pan = min_pan
         scan_tilt = 0
         direction = 1
-        give_up_tilt = 85
-        found = False
-        while not found:
+        max_scan_tilt = 85
+        while True:
             # set tilt
             for i in range(0, max_pan, pan_move_step):
                 self.eos.set_pan(1,0,scan_pan, "r1", use_degrees=True)
                 self.eos.set_tilt(1,0,scan_tilt, "r1", use_degrees=True)
                 self.pan = scan_pan
                 self.tilt = scan_tilt
-                sleep(0.2)
-                intensity = self.get_new_data().get(self.target_sensor, {}).get("intensity", 0)
-                if intensity > self.sensor_baselines.get(self.target_sensor, {}).get("intensity", 0) + 1000000:
-                    return Phase.OPTIMIZE
-                else:
-                    logging.info(f"Intensity: {intensity}, Baseline: {self.sensor_baselines.get(self.target_sensor, {}).get('intensity', 0)}")
+                sleep(0.02)
 
-                self.target_sensor_previous_intensity = intensity
+                # get the intensity data for each sensor and store it in history with the pan/tilt values
+                sensor_data = self.get_new_data()
+                for sensor_id, intensity in sensor_data.items():
+                    if sensor_id not in self.sensor_history:
+                        self.sensor_history[sensor_id] = []
+                    self.sensor_history[sensor_id].append({"intensity": intensity, "pan": scan_pan, "tilt": scan_tilt, "direction": direction})
+
                 scan_pan += pan_move_step * direction
 
 
@@ -171,89 +162,53 @@ class Navigator:
                 scan_tilt += tilt_move_step
                 if scan_tilt > max_tilt:
                     break
-            if (abs(scan_tilt) > give_up_tilt):
-                logging.info("Giving up")
+            if (abs(scan_tilt) > max_scan_tilt):
+                logging.info("End of scan")
                 self.eos.set_intensity(1, 0)
                 self.eos.set_pan(1, 0, 0, "r1", use_degrees=True)
                 self.eos.set_tilt(1, 0, 0, "r1", use_degrees=True)
-                return Phase.FAILED
+                break
 
-        return Phase.OPTIMIZE
 
-    def optimize_phase(self):
+        # write the entire deque to a file
+        with open("sensor_history.json", "w") as f:
+            json.dump(self.sensor_history, f)
+        # Calculate centroid of sensor datae
+        return Phase.CALCULATE
+
+    def calculate_phase(self):
         """
-        Implements the centroid-based algorithm to focus the light on the target sensor.
-        Utilizes all sensors' data to compute the centroid and adjusts pan and tilt accordingly.
+        Looks through the entire history of sensor data and calculates the
+        pan/tilt values that correspond to the highest intensity for each sensor.
         """
-        logging.info("Entering LOCATE phase.")
-        steps = 0
-        max_baseline_checks = 100  # Define how many consecutive baseline checks to allow
-        baseline_checks = 0
+        logging.info("Entering CALCULATE phase.")
+        for sensor_id, history in self.sensor_history.items():
+            max_intensity = -1
+            best_pan = 0
+            best_tilt = 0
+            best_direction = 1
+            for record in history:
+                intensity = record["intensity"]
+                pan = record["pan"]
+                tilt = record["tilt"]
+                if intensity > max_intensity:
+                    max_intensity = intensity
+                    best_pan = pan
+                    best_tilt = tilt
+                    best_direction = record["direction"]
+            logging.info(f"Sensor {sensor_id} max intensity: {max_intensity} at pan: {best_pan}, tilt: {best_tilt}")
+            corrected_pan = self.predict_corrected_pan_nonlinear(best_pan, best_tilt, best_direction)
+            self.eos.set_sensor_data(sensor_id, corrected_pan, best_tilt, best_direction)
 
-        while steps < self.max_steps:
-            # Check if sensor data is close to baseline
-            if self.is_close_to_baseline():
-                logging.warning(f"Step {steps}: Sensor intensities are close to baseline. Skipping adjustments.")
-                baseline_checks += 1
-                if baseline_checks >= max_baseline_checks:
-                    logging.error("Sensor data has been close to baseline for too many consecutive steps. Failing locate phase.")
-                    return Phase.FAILED
-                sleep(1)
-                steps += 1
-                continue
-            else:
-                baseline_checks = 0  # Reset counter if not close to baseline
+        logging.info("Calculated best pan/tilt for each sensor.")
 
-            current_centroid = self.compute_centroid()
-            target_pos = self.gui.get_sensor_positions()[self.target_sensor]
-            distance_to_target = self.distance(current_centroid, target_pos)
-            logging.debug(f"Step {steps}: Current Centroid: {current_centroid}, Distance to Target: {distance_to_target:.2f}")
+        for sensor_id in self.sensor_history:
+            logging.info(f"Sensor {sensor_id}: {self.eos.get_sensor_data(sensor_id)}")
 
-            # Check if within tolerance
-            if distance_to_target <= self.tolerance:
-                logging.info(f"Centroid is within tolerance ({self.tolerance}).")
-                return Phase.COMPLETE
+        with open("sensor_history.json", "w") as f:
+            json.dump(self.sensor_history, f, indent=4)
 
-            # Calculate direction vector towards target
-            direction_vector = np.array(target_pos) - np.array(current_centroid)
-            distance = np.linalg.norm(direction_vector)
-            if distance == 0:
-                logging.debug("Centroid is exactly at the target position.")
-                return Phase.COMPLETE
-            direction_unit_vector = direction_vector / distance
-
-            # Determine movement based on direction
-            pan_move = direction_unit_vector[0] * self.step_size
-            tilt_move = direction_unit_vector[1] * self.step_size
-
-            # Apply movement
-            self.send_light_command(pan_move, tilt_move)
-            sleep(0.5)  # Wait for system to stabilize
-
-            # Recompute centroid after movement
-            new_centroid = self.compute_centroid()
-            new_distance_to_target = self.distance(new_centroid, target_pos)
-            logging.debug(f"After Move: New Centroid: {new_centroid}, New Distance to Target: {new_distance_to_target:.2f}")
-
-            # Check if the move brought us closer
-            if new_distance_to_target < distance_to_target - self.tolerance:
-                logging.info(f"Moved towards target. New Distance: {new_distance_to_target:.2f}")
-                self.best_intensity = self.get_weighted_intensity()
-            else:
-                # Revert move if no improvement
-                self.send_light_command(-pan_move, -tilt_move)
-                logging.debug("No improvement. Reverting move.")
-
-            # Adjust step size dynamically for finer adjustments
-            if steps > 0 and steps % 50 == 0 and self.step_size > self.min_step_size:
-                self.step_size = max(self.min_step_size, self.step_size - self.step_decrement)
-                logging.info(f"Reducing step_size to {self.step_size} degrees for finer adjustments.")
-
-            steps += 1
-            sleep(1)  # Wait for system to stabilize
-
-        logging.warning("Reached maximum number of steps without completing locate phase.")
-        return Phase.FAILED
+        return Phase.COMPLETE
 
     def is_close_to_baseline(self):
         """
@@ -270,106 +225,12 @@ class Navigator:
         logging.debug("All sensor intensities are close to their baselines.")
         return True
 
-    def compute_centroid(self):
-        """
-        Computes the intensity-weighted centroid of the light based on all sensors' data.
-        """
-        new_data = self.get_new_data()
-        total_intensity = sum(data['intensity'] for data in new_data.values())
-        if total_intensity == 0:
-            logging.warning("Total intensity is zero. Centroid cannot be computed.")
-            return (0, 0)
-
-        centroid_x = sum(data['x'] * data['intensity'] for data in new_data.values()) / total_intensity
-        centroid_y = sum(data['y'] * data['intensity'] for data in new_data.values()) / total_intensity
-        centroid = (centroid_x, centroid_y)
-        logging.debug(f"Computed Centroid: {centroid}")
-        return centroid
-
-    def get_weighted_intensity(self):
-        """
-        Calculates the weighted sum of intensities from all sensors.
-        Weights are based on the inverse square of the distance to the target sensor.
-        """
-        new_data = self.get_new_data()
-        weighted_intensity = 0.0
-        for sensor_id, data in new_data.items():
-            weight = self.calculate_weight(sensor_id)
-            sensor_intensity = data.get("intensity", 0)
-            contribution = sensor_intensity * weight
-            weighted_intensity += contribution
-            logging.debug(f"Sensor {sensor_id}: Intensity={sensor_intensity}, Weight={weight:.4f}, Weighted Contribution={contribution:.4f}")
-        logging.debug(f"Total Weighted Intensity: {weighted_intensity:.4f}")
-        return weighted_intensity
-
-    def calculate_weight(self, sensor_id):
-        """
-        Calculates the weight for a sensor based on its distance to the target sensor.
-        Uses inverse square of the distance to reduce the influence of far sensors.
-        """
-        try:
-            target_pos = self.gui.get_sensor_positions()[self.target_sensor]
-            sensor_pos = self.gui.get_sensor_positions()[sensor_id]
-            distance = self.distance(sensor_pos, target_pos)
-            if distance == 0:
-                return 1.0  # Maximum weight if at the same position
-            return 1.0 / (distance ** 2)  # Inverse square weighting
-        except KeyError as e:
-            logging.error(f"Sensor ID {sensor_id} not found in GUI positions: {e}")
-            return 0.0  # No contribution if sensor position is unknown
-        except Exception as e:
-            logging.error(f"Error calculating weight for sensor {sensor_id}: {e}")
-            return 0.0
 
     def get_new_data(self):
-        """
-        Retrieves and filters new sensor data.
-        Applies a moving average filter to each sensor's intensity to reduce noise.
-        """
-        new_sensor_data = {}
-
         with self.lock:
-            raw_sensor_data = self.sensor_data.copy()  # sensor_id: intensity or sensor_id: dict
+            new_data = self.sensor_data.copy()
 
-        logging.debug(f"Raw sensor data: {raw_sensor_data}")
-
-        if self.gui is not None:
-            try:
-                sensor_positions = self.gui.get_sensor_positions()  # sensor_id: (x, y)
-            except Exception as e:
-                logging.error(f"Failed to get sensor positions from GUI: {e}")
-                return new_sensor_data
-
-            for sensor_id, data in raw_sensor_data.items():
-                if sensor_id in sensor_positions:
-                    # Determine if 'data' is a dict or a numerical value
-                    if isinstance(data, dict):
-                        intensity = data.get("intensity", 0)
-                    else:
-                        intensity = data  # Assuming 'data' is intensity
-
-                    # Update sensor history with new intensity
-                    if sensor_id in self.sensor_history:
-                        self.sensor_history[sensor_id].append(intensity)
-                        # Calculate moving average
-                        avg_intensity = np.mean(self.sensor_history[sensor_id])
-                    else:
-                        logging.warning(f"Sensor ID {sensor_id} has no history initialized.")
-                        avg_intensity = intensity  # Use raw intensity if history not initialized
-
-                    new_sensor_data[sensor_id] = {
-                        "intensity": avg_intensity,
-                        "x": sensor_positions[sensor_id][0],
-                        "y": sensor_positions[sensor_id][1],
-                    }
-                    logging.debug(f"Sensor {sensor_id} Position: ({sensor_positions[sensor_id][0]}, {sensor_positions[sensor_id][1]}), Averaged Intensity: {avg_intensity:.2f}")
-                else:
-                    logging.warning(f"Sensor ID {sensor_id} not found in GUI positions.")
-        else:
-            logging.warning("GUI is not defined. Cannot map sensor positions.")
-
-        logging.debug(f"Retrieved new sensor data: {new_sensor_data}")
-        return new_sensor_data
+        return new_data
 
     def execute(self):
         """
@@ -381,14 +242,13 @@ class Navigator:
             self.current_phase = self.setup_phase()
         elif self.current_phase == Phase.LOCATE:
             self.current_phase = self.locate_phase()
-        elif self.current_phase == Phase.OPTIMIZE:
-            self.current_phase = self.optimize_phase()
+        elif self.current_phase == Phase.CALCULATE:
+            self.current_phase = self.calculate_phase()
 
         status = {
             "current_phase": self.current_phase.name,
             "pan": self.pan,
             "tilt": self.tilt,
-            "target_sensor": self.target_sensor,
         }
         logging.info(f"Current Status: {status}")
         return status
@@ -398,3 +258,24 @@ class Navigator:
         Calculates Euclidean distance between two positions.
         """
         return np.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+
+    def predict_corrected_pan_nonlinear(self, actual_pan, tilt, direction):
+        """
+        Predict the corrected pan value using the refined nonlinear model.
+
+        Parameters:
+        - actual_pan (float): The actual pan value.
+        - tilt (float): The tilt value.
+        - direction (int): The direction of motion (1 for forward, -1 for backward).
+
+        Returns:
+        - float: The predicted corrected pan value.
+        """
+        k1 = 1.5728
+        k2 = -0.0187
+        k3 = 0.0000630
+
+        # Compute the predicted corrected pan
+        overshoot_adjustment = (k1 * tilt + k2 * tilt**2 + k3 * tilt * actual_pan) * direction
+        corrected_pan = actual_pan - overshoot_adjustment
+        return corrected_pan

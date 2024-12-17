@@ -35,7 +35,7 @@ class LightControlApp:
         self.debounce_enabled = debounce_enabled
         self.gui = None
 
-        self.eos = EOS("192.168.1.105", 8000)
+        self.eos = EOS("192.168.1.100", 8000)
         self.comm = Communicator()
         self.comm.update_label.connect(self.update_gui_label)
 

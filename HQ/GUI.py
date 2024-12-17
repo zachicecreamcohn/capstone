@@ -278,75 +278,6 @@ class SensorGUI(QtWidgets.QWidget):
         self.progress_label.setText("Status: Ground plan uploaded. Please set the origin and stage dimensions.")
         logging.info("Stage reset.")
 
-    def enable_origin_setting(self):
-        """
-        Enables the mode to set the origin by clicking on the ground plan.
-        """
-        if not hasattr(self, "ground_plan"):
-            QMessageBox.warning(self, "No Ground Plan", "Please upload a ground plan first.")
-            return
-
-        self.view.setCursor(QtCore.Qt.CrossCursor)
-        self.origin_setting = True
-        self.progress_label.setText("Status: Click on the ground plan to set the origin (top-left corner).")
-        logging.info("Origin setting mode enabled.")
-
-    def set_stage_dimensions(self):
-        """
-        Sets the stage dimensions based on user input and creates the stage rectangle.
-        """
-        if not self.origin_set:
-            QMessageBox.warning(self, "Origin Not Set", "Please set the origin before setting stage dimensions.")
-            return
-
-        try:
-            # Retrieve width
-            width_feet = float(self.stage_width_feet.text()) if self.stage_width_feet.text() else 0
-            width_inches = float(self.stage_width_inches.text()) if self.stage_width_inches.text() else 0
-            # Retrieve height
-            height_feet = float(self.stage_height_feet.text()) if self.stage_height_feet.text() else 0
-            height_inches = float(self.stage_height_inches.text()) if self.stage_height_inches.text() else 0
-
-            if width_feet < 0 or width_inches < 0 or height_feet < 0 or height_inches < 0:
-                raise ValueError
-
-            # Convert to total inches
-            total_width_inches = width_feet * 12 + width_inches
-            total_height_inches = height_feet * 12 + height_inches
-
-            if total_width_inches <= 0 or total_height_inches <= 0:
-                raise ValueError
-
-            self.stage_dimensions = {
-                "width_feet": width_feet,
-                "width_inches": width_inches,
-                "height_feet": height_feet,
-                "height_inches": height_inches,
-            }
-
-            # Convert to scene units based on scale
-            width_scene = total_width_inches / self.scale_factor
-            height_scene = total_height_inches / self.scale_factor
-
-            # Create or update the stage rectangle
-            if self.stage_rectangle:
-                self.scene.removeItem(self.stage_rectangle)
-
-            self.stage_rectangle = QtWidgets.QGraphicsRectItem(
-                QtCore.QRectF(0, 0, width_scene, height_scene)
-            )
-            self.stage_rectangle.setPen(QPen(QColor("green"), 2))
-            self.stage_rectangle.setBrush(QBrush(QColor(0, 255, 0, 50)))  # Semi-transparent
-            self.stage_rectangle.setPos(self.origin_point)
-            self.stage_rectangle.setZValue(0.5)  # Above ground plan
-            self.scene.addItem(self.stage_rectangle)
-
-            self.progress_label.setText("Status: Stage dimensions set successfully.")
-            logging.info(f"Stage dimensions set: Width={total_width_inches} inches, Height={total_height_inches} inches.")
-
-        except ValueError:
-            logging.error("Invalid stage dimension inputs.")
-            QMessageBox.warning(self, "Invalid Input", "Please enter valid positive numbers for stage dimensions.")
 
     def size_changed(self, size_name):
         """
@@ -449,30 +380,6 @@ class SensorGUI(QtWidgets.QWidget):
         logging.info(f"Sensor Positions: {positions}")
         QMessageBox.information(self, "Sensor Positions", self.format_sensor_positions(positions))
 
-    def format_sensor_positions(self, positions):
-        """
-        Formats sensor positions for display.
-        """
-        formatted = ""
-        for sensor_id, pos in positions.items():
-            feet_x, inches_x, feet_y, inches_y = self.convert_to_feet_inches_stage(pos[0], pos[1])
-            formatted += f"Sensor {sensor_id}: {feet_x}' {inches_x:.2f}\" , {feet_y}' {inches_y:.2f}\"\n"
-        return formatted
-
-    def get_sensor_positions_stage(self):
-        """
-        Retrieves the current positions of all sensors in the stage coordinate system.
-        """
-        sensor_positions = {}
-        for sensor_id, rect in self.sensors.items():
-            pos = rect.scenePos()  # Get actual position in scene
-            if self.origin_set and self.scale_factor > 0:
-                stage_pos = pos - self.origin_point  # Relative to origin
-                sensor_positions[sensor_id] = (stage_pos.x(), stage_pos.y())
-            else:
-                sensor_positions[sensor_id] = (pos.x(), pos.y())
-        return sensor_positions
-
     def reset_positions(self):
         """
         Resets all sensors to their default positions.
@@ -487,37 +394,6 @@ class SensorGUI(QtWidgets.QWidget):
             rect.setPos(*default_positions[sensor_id])
         logging.info("Sensor positions have been reset.")
 
-    def convert_to_feet_inches_stage(self, x, y):
-        """
-        Converts stage-relative coordinates to feet and inches based on the scale factor.
-        """
-        # Assuming scale_factor is inches per foot
-        real_x_inches = x * self.scale_factor
-        real_y_inches = y * self.scale_factor
-
-        real_x_feet = int(real_x_inches // 12)
-        real_x_remaining_inches = real_x_inches % 12
-
-        real_y_feet = int(real_y_inches // 12)
-        real_y_remaining_inches = real_y_inches % 12
-
-        return (real_x_feet, real_x_remaining_inches, real_y_feet, real_y_remaining_inches)
-
-    def convert_to_feet_inches_scene(self, x, y):
-        """
-        Converts scene coordinates to feet and inches based on the scale factor.
-        """
-        # Assuming scale_factor is inches per foot
-        real_x_inches = x * self.scale_factor
-        real_y_inches = y * self.scale_factor
-
-        real_x_feet = int(real_x_inches // 12)
-        real_x_remaining_inches = real_x_inches % 12
-
-        real_y_feet = int(real_y_inches // 12)
-        real_y_remaining_inches = real_y_inches % 12
-
-        return (real_x_feet, real_x_remaining_inches, real_y_feet, real_y_remaining_inches)
 
     def eventFilter(self, source, event):
         """
@@ -544,6 +420,8 @@ class SensorGUI(QtWidgets.QWidget):
                 origin_marker.setZValue(1)
                 self.scene.addItem(origin_marker)
             else:
+
+                feet_x, inches_x, feet_y, inches_y = None, None, None, None
                 if self.origin_set and self.stage_rectangle:
                     # Optionally, display clicked coordinates relative to origin
                     stage_point = scene_pos - self.origin_point
@@ -558,139 +436,36 @@ class SensorGUI(QtWidgets.QWidget):
                         self.progress_label.setText(f"Status: {coord_str}")
                         logging.info(coord_str)
 
-        return super().eventFilter(source, event)
 
-    def set_stage_dimensions(self):
-        """
-        Sets the stage dimensions based on user input and creates the stage rectangle.
-        """
-        if not self.origin_set:
-            QMessageBox.warning(self, "Origin Not Set", "Please set the origin before setting stage dimensions.")
-            return
+                # if the clicked position is less than or greater than the stage dimensions, do not move the EOS
+                if feet_x < 0 or feet_x > self.stage_dimensions["width_feet"] or feet_y < 0 or feet_y > self.stage_dimensions["height_feet"]:
+                    self.progress_label.setText("Status: Clicked position is outside the stage. Please click within the stage.")
+                    logging.warning("Clicked position is outside the stage.")
+                    return super().eventFilter(source, event)
 
-        try:
-            # Retrieve width
-            width_feet = float(self.stage_width_feet.text()) if self.stage_width_feet.text() else 0
-            width_inches = float(self.stage_width_inches.text()) if self.stage_width_inches.text() else 0
-            # Retrieve height
-            height_feet = float(self.stage_height_feet.text()) if self.stage_height_feet.text() else 0
-            height_inches = float(self.stage_height_inches.text()) if self.stage_height_inches.text() else 0
+                clicked_coords = self.feet_inches_to_feet(feet_x, inches_x), self.feet_inches_to_feet(feet_y, inches_y)
 
-            if width_feet < 0 or width_inches < 0 or height_feet < 0 or height_inches < 0:
-                raise ValueError
+                # convert stage positions of sensors to feet and inches and then inches
+                sensor_positions = self.get_sensor_positions_stage()
+                sensor_positions = {
+                    sensor_id: (
+                        self.feet_inches_to_feet(*self.convert_to_feet_inches_stage(pos[0], pos[1])[:2]),
+                        self.feet_inches_to_feet(*self.convert_to_feet_inches_stage(pos[0], pos[1])[2:]),
+                    )
+                    for sensor_id, pos in sensor_positions.items()
+                }
+                stage_height = self.feet_inches_to_feet(self.stage_dimensions["height_feet"], self.stage_dimensions["height_inches"])
+                self.eos.move_to_point(x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions)
 
-            # Convert to total inches
-            total_width_inches = width_feet * 12 + width_inches
-            total_height_inches = height_feet * 12 + height_inches
 
-            if total_width_inches <= 0 or total_height_inches <= 0:
-                raise ValueError
 
-            self.stage_dimensions = {
-                "width_feet": width_feet,
-                "width_inches": width_inches,
-                "height_feet": height_feet,
-                "height_inches": height_inches,
-            }
-
-            # Convert to scene units based on scale
-            width_scene = total_width_inches / self.scale_factor
-            height_scene = total_height_inches / self.scale_factor
-
-            # Create or update the stage rectangle
-            if self.stage_rectangle:
-                self.scene.removeItem(self.stage_rectangle)
-
-            self.stage_rectangle = QtWidgets.QGraphicsRectItem(
-                QtCore.QRectF(0, 0, width_scene, height_scene)
-            )
-            self.stage_rectangle.setPen(QPen(QColor("green"), 2))
-            self.stage_rectangle.setBrush(QBrush(QColor(0, 255, 0, 50)))  # Semi-transparent
-            self.stage_rectangle.setPos(self.origin_point)
-            self.stage_rectangle.setZValue(0.5)  # Above ground plan
-            self.scene.addItem(self.stage_rectangle)
-
-            self.progress_label.setText("Status: Stage dimensions set successfully.")
-            logging.info(f"Stage dimensions set: Width={total_width_inches} inches, Height={total_height_inches} inches.")
-
-        except ValueError:
-            logging.error("Invalid stage dimension inputs.")
-            QMessageBox.warning(self, "Invalid Input", "Please enter valid positive numbers for stage dimensions.")
-
-    def display_coordinate_axes(self):
-        """
-        Displays the X and Y axes on the stage for better visualization.
-        """
-        # Remove existing axes if any
-        for item in self.scene.items():
-            if isinstance(item, QtWidgets.QGraphicsLineItem) and item.data(0) == "axis":
-                self.scene.removeItem(item)
-
-        if not self.origin_set:
-            return
-
-        # X-axis from origin to (width, 0) in stage coordinates
-        width_scene = self.stage_dimensions["width_feet"] * 12 / self.scale_factor + self.stage_dimensions["width_inches"] / self.scale_factor
-        height_scene = self.stage_dimensions["height_feet"] * 12 / self.scale_factor + self.stage_dimensions["height_inches"] / self.scale_factor
-
-        origin_scene = self.origin_point
-        x_end_scene = QtCore.QPointF(origin_scene.x() + width_scene, origin_scene.y())
-        y_end_scene = QtCore.QPointF(origin_scene.x(), origin_scene.y() + height_scene)
-
-        # Create X-axis line
-        x_axis = QtWidgets.QGraphicsLineItem(QtCore.QLineF(origin_scene, x_end_scene))
-        x_axis.setPen(QPen(QColor("blue"), 2))
-        x_axis.setData(0, "axis")
-        self.scene.addItem(x_axis)
-
-        # Create Y-axis line
-        y_axis = QtWidgets.QGraphicsLineItem(QtCore.QLineF(origin_scene, y_end_scene))
-        y_axis.setPen(QPen(QColor("red"), 2))
-        y_axis.setData(0, "axis")
-        self.scene.addItem(y_axis)
-
-        logging.info("Coordinate axes displayed on the stage.")
-
-    def eventFilter(self, source, event):
-        """
-        Handles mouse press events for coordinate display and origin setting.
-        """
-        if event.type() == QtCore.QEvent.MouseButtonPress and source is self.view.viewport():
-            mouse_pos = event.pos()
-            scene_pos = self.view.mapToScene(mouse_pos)
-            logging.info(f"Mouse clicked at scene position: ({scene_pos.x()}, {scene_pos.y()})")
-
-            if hasattr(self, "origin_setting") and self.origin_setting:
-                # Set the origin
-                self.origin_point = scene_pos
-                self.origin_set = True
-                self.origin_setting = False
-                self.view.setCursor(QtCore.Qt.ArrowCursor)
-                self.progress_label.setText("Status: Origin set. Enter stage dimensions.")
-                logging.info(f"Origin set at: ({scene_pos.x()}, {scene_pos.y()})")
-                # Optionally, mark the origin
-                origin_marker = QtWidgets.QGraphicsEllipseItem(-5, -5, 10, 10)
-                origin_marker.setBrush(QBrush(QColor("blue")))
-                origin_marker.setPen(QPen(QColor("black")))
-                origin_marker.setPos(scene_pos)
-                origin_marker.setZValue(1)
-                self.scene.addItem(origin_marker)
-            else:
-                if self.origin_set and self.stage_rectangle:
-                    # Optionally, display clicked coordinates relative to origin
-                    stage_point = scene_pos - self.origin_point
-                    feet_x, inches_x, feet_y, inches_y = self.convert_to_feet_inches_stage(stage_point.x(), stage_point.y())
-                    coord_str = f"Clicked at: {feet_x}' {inches_x:.2f}\" , {feet_y}' {inches_y:.2f}\""
-                    self.progress_label.setText(f"Status: {coord_str}")
-                    logging.info(coord_str)
-                else:
-                    if self.scale_factor:
-                        feet_x, inches_x, feet_y, inches_y = self.convert_to_feet_inches_scene(scene_pos.x(), scene_pos.y())
-                        coord_str = f"Clicked at: {feet_x}' {inches_x:.2f}\" , {feet_y}' {inches_y:.2f}\""
-                        self.progress_label.setText(f"Status: {coord_str}")
-                        logging.info(coord_str)
 
         return super().eventFilter(source, event)
+
+
+    def feet_inches_to_feet(self, feet, inches):
+        return feet + inches/12
+
 
     def format_sensor_positions(self, positions):
         """
@@ -715,20 +490,6 @@ class SensorGUI(QtWidgets.QWidget):
             else:
                 sensor_positions[sensor_id] = (pos.x(), pos.y())
         return sensor_positions
-
-    def reset_positions(self):
-        """
-        Resets all sensors to their default positions.
-        """
-        default_positions = {
-            1: (100, 100),
-            2: (700, 100),
-            3: (100, 500),
-            4: (700, 500),
-        }
-        for sensor_id, rect in self.sensors.items():
-            rect.setPos(*default_positions[sensor_id])
-        logging.info("Sensor positions have been reset.")
 
     def convert_to_feet_inches_stage(self, x, y):
         """
@@ -868,98 +629,6 @@ class SensorGUI(QtWidgets.QWidget):
         self.progress_label.setText("Status: Click on the ground plan to set the origin (top-left corner).")
         logging.info("Origin setting mode enabled.")
 
-    def set_stage_dimensions(self):
-        """
-        Sets the stage dimensions based on user input and creates the stage rectangle.
-        """
-        if not self.origin_set:
-            QMessageBox.warning(self, "Origin Not Set", "Please set the origin before setting stage dimensions.")
-            return
-
-        try:
-            # Retrieve width
-            width_feet = float(self.stage_width_feet.text()) if self.stage_width_feet.text() else 0
-            width_inches = float(self.stage_width_inches.text()) if self.stage_width_inches.text() else 0
-            # Retrieve height
-            height_feet = float(self.stage_height_feet.text()) if self.stage_height_feet.text() else 0
-            height_inches = float(self.stage_height_inches.text()) if self.stage_height_inches.text() else 0
-
-            if width_feet < 0 or width_inches < 0 or height_feet < 0 or height_inches < 0:
-                raise ValueError
-
-            # Convert to total inches
-            total_width_inches = width_feet * 12 + width_inches
-            total_height_inches = height_feet * 12 + height_inches
-
-            if total_width_inches <= 0 or total_height_inches <= 0:
-                raise ValueError
-
-            self.stage_dimensions = {
-                "width_feet": width_feet,
-                "width_inches": width_inches,
-                "height_feet": height_feet,
-                "height_inches": height_inches,
-            }
-
-            # Convert to scene units based on scale
-            width_scene = total_width_inches / self.scale_factor
-            height_scene = total_height_inches / self.scale_factor
-
-            # Create or update the stage rectangle
-            if self.stage_rectangle:
-                self.scene.removeItem(self.stage_rectangle)
-
-            self.stage_rectangle = QtWidgets.QGraphicsRectItem(
-                QtCore.QRectF(0, 0, width_scene, height_scene)
-            )
-            self.stage_rectangle.setPen(QPen(QColor("green"), 2))
-            self.stage_rectangle.setBrush(QBrush(QColor(0, 255, 0, 50)))  # Semi-transparent
-            self.stage_rectangle.setPos(self.origin_point)
-            self.stage_rectangle.setZValue(0.5)  # Above ground plan
-            self.scene.addItem(self.stage_rectangle)
-
-            self.display_coordinate_axes()
-            self.progress_label.setText("Status: Stage dimensions set successfully.")
-            logging.info(f"Stage dimensions set: Width={total_width_inches} inches, Height={total_height_inches} inches.")
-
-        except ValueError:
-            logging.error("Invalid stage dimension inputs.")
-            QMessageBox.warning(self, "Invalid Input", "Please enter valid positive numbers for stage dimensions.")
-
-    def display_coordinate_axes(self):
-        """
-        Displays the X and Y axes on the stage for better visualization.
-        """
-        # Remove existing axes if any
-        for item in self.scene.items():
-            if isinstance(item, QtWidgets.QGraphicsLineItem) and item.data(0) == "axis":
-                self.scene.removeItem(item)
-
-        if not self.origin_set or not self.stage_rectangle:
-            return
-
-        # X-axis from origin to (width, 0) in stage coordinates
-        rect = self.stage_rectangle.rect()
-        width_scene = rect.width()
-        height_scene = rect.height()
-
-        origin_scene = self.origin_point
-        x_end_scene = QtCore.QPointF(origin_scene.x() + width_scene, origin_scene.y())
-        y_end_scene = QtCore.QPointF(origin_scene.x(), origin_scene.y() + height_scene)
-
-        # Create X-axis line
-        x_axis = QtWidgets.QGraphicsLineItem(QtCore.QLineF(origin_scene, x_end_scene))
-        x_axis.setPen(QPen(QColor("blue"), 2))
-        x_axis.setData(0, "axis")
-        self.scene.addItem(x_axis)
-
-        # Create Y-axis line
-        y_axis = QtWidgets.QGraphicsLineItem(QtCore.QLineF(origin_scene, y_end_scene))
-        y_axis.setPen(QPen(QColor("red"), 2))
-        y_axis.setData(0, "axis")
-        self.scene.addItem(y_axis)
-
-        logging.info("Coordinate axes displayed on the stage.")
 
 
 if __name__ == "__main__":

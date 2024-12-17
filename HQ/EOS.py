@@ -2,6 +2,7 @@ from pythonosc import udp_client
 import logging
 import json
 import os
+from PanTiltPredictor import PanTiltPredictor
 
 # Fixture data with pan and tilt ranges
 fixture_data = {
@@ -88,6 +89,7 @@ class EOS(object):
         with open(".sensors.json", "r") as f:
             self.sensor_data = json.load(f)
 
+
         return self.sensor_data[str(sensor_id)]
 
     def sensors_data_file_is_valid(self) -> bool:
@@ -116,51 +118,35 @@ class EOS(object):
                 raise ValueError(f"Requested move {move_value}% results in {new_value}°, which is out of range ({min_value}° to {max_value}°)")
             return float(new_value)
 
-    def move_to_point(self, x: float, y: float, sensor_1_coords: tuple, sensor_2_coords: tuple, sensor_3_coords: tuple, sensor_4_coords: tuple, fixture_name: str) -> None:
-        points = [
-            {"x": sensor_1_coords[0], "y": sensor_1_coords[1], "pan": self.sensor_data[1]["pan"], "tilt": self.sensor_data[1]["tilt"]},
-            {"x": sensor_2_coords[0], "y": sensor_2_coords[1], "pan": self.sensor_data[2]["pan"], "tilt": self.sensor_data[2]["tilt"]},
-            {"x": sensor_3_coords[0], "y": sensor_3_coords[1], "pan": self.sensor_data[3]["pan"], "tilt": self.sensor_data[3]["tilt"]},
-            {"x": sensor_4_coords[0], "y": sensor_4_coords[1], "pan": self.sensor_data[4]["pan"], "tilt": self.sensor_data[4]["tilt"]}
-        ]
-
-        # get the pan and tilt values for the target point
-        pan, tilt = self.barycentric_interpolation(x, y, points)
-
-        # set the pan and tilt values for the target point
-        self.set_pan(1, self.sensor_data[1]["pan"], pan, fixture_name)
-        self.set_tilt(1, self.sensor_data[1]["tilt"], tilt, fixture_name)
-
-
-    def barycentric_interpolation(self, x, y, points):
+    def move_to_point(self, x, y, stage_max_y, sensor_coords: dict):
         """
-        Parameters:
-        - x, y: Coordinates of the target point.
-        - points: A list of dictionaries with structure:
-            [{"x": x1, "y": y1, "pan": pan1, "tilt": tilt1}, ...]
-
-        Returns:
-        - (pan, tilt): Predicted pan and tilt for the target point.
+        Expects sensor_coords to be a dictionary with sensor_id as key and a tuple of (x, y) as value.
         """
-        def barycentric_coords(px, py, p1, p2, p3):
-            # Compute barycentric coordinates for point (px, py) in triangle p1, p2, p3
-            denom = (p2['y'] - p3['y'])*(p1['x'] - p3['x']) + (p3['x'] - p2['x'])*(p1['y'] - p3['y'])
-            l1 = ((p2['y'] - p3['y'])*(px - p3['x']) + (p3['x'] - p2['x'])*(py - p3['y'])) / denom
-            l2 = ((p3['y'] - p1['y'])*(px - p3['x']) + (p1['x'] - p3['x'])*(py - p3['y'])) / denom
-            l3 = 1 - l1 - l2
-            return l1, l2, l3
+        # TODO: Make sensor data specific to fixture when storing.
+        sensor1_data = self.get_sensor_data(1)
+        sensor2_data = self.get_sensor_data(2)
+        sensor3_data = self.get_sensor_data(3)
+        sensor4_data = self.get_sensor_data(4)
 
-        # Split the quadrilateral into two triangles
-        P1, P2, P3, P4 = points
+        reference_point1 = (sensor_coords[1][0], sensor_coords[1][1], sensor1_data["pan"], sensor1_data["tilt"])
+        reference_point2 = (sensor_coords[2][0], sensor_coords[2][1], sensor2_data["pan"], sensor2_data["tilt"])
+        reference_point3 = (sensor_coords[3][0], sensor_coords[3][1], sensor3_data["pan"], sensor3_data["tilt"])
+        reference_point4 = (sensor_coords[4][0], sensor_coords[4][1], sensor4_data["pan"], sensor4_data["tilt"])
 
-        # Check which triangle the point (x, y) falls in
-        l1, l2, l3 = barycentric_coords(x, y, P1, P2, P3)
-        if all(0 <= l <= 1 for l in [l1, l2, l3]):
-            pan = l1 * P1['pan'] + l2 * P2['pan'] + l3 * P3['pan']
-            tilt = l1 * P1['tilt'] + l2 * P2['tilt'] + l3 * P3['tilt']
-            return pan, tilt
+        pan, tilt = self.predict(x, y, reference_point1, reference_point2, reference_point3, reference_point4, stage_max_y)
+        print(f"Pan: {pan}, Tilt: {tilt}")
+        self.set_pan(1, 0, pan, "r1", use_degrees=True)
+        self.set_tilt(1, 0, tilt, "r1", use_degrees=True)
 
-        l1, l2, l3 = barycentric_coords(x, y, P3, P4, P1)
-        pan = l1 * P3['pan'] + l2 * P4['pan'] + l3 * P1['pan']
-        tilt = l1 * P3['tilt'] + l2 * P4['tilt'] + l3 * P1['tilt']
+    @staticmethod
+    def invert_y(y, max_y):
+        return max_y - y
+
+    def predict(self, target_x, target_y, reference_point1: tuple, reference_point2: tuple, reference_point3: tuple, reference_point4: tuple, stage_max_y):
+        predictor = PanTiltPredictor([reference_point1, reference_point2, reference_point3, reference_point4])
+
+        print(f"Target: {target_x}, {target_y}")
+        print(f"Reference points: {reference_point1}, {reference_point2}, {reference_point3}, {reference_point4}")
+        print(f"Stage max y: {stage_max_y}")
+        pan, tilt = predictor.predict_pan_tilt(target_x, self.invert_y(target_y, stage_max_y))
         return pan, tilt

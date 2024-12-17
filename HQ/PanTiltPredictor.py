@@ -11,33 +11,28 @@ class PanTiltPredictor:
             (x_i, y_i, pan_i, tilt_i)
             where:
                 x_i, y_i: Coordinates of the point on stage in feet (float)
-                pan_i: Pan angle in degrees (0-360)
+                pan_i: Pan angle in degrees (-270 to 270)
                 tilt_i: Tilt angle in degrees (0-90)
         """
         if len(four_points) != 4:
             raise ValueError("Exactly four reference points are required.")
 
-        self.four_points = four_points
+        # Map all pan_i to 0-360 for internal consistency
+        self.four_points = [
+            (x, y, self._map_to_0_360(pan_i), tilt_i)
+            for (x, y, pan_i, tilt_i) in four_points
+        ]
         self.light_position = self._find_light_position()
 
     @staticmethod
-    def _normalize_angle(angle):
-        """Normalize angle to be within [0, 360) degrees."""
-        return angle % 360
+    def _map_to_0_360(angle):
+        """Map angle from -270 to 270 to 0-360."""
+        return angle + 360 if angle < 0 else angle
 
     @staticmethod
-    def _angle_difference(a1, a2):
-        """
-        Compute the minimal difference between two angles.
-
-        Parameters:
-        - a1, a2: Angles in degrees.
-
-        Returns:
-        - Minimal absolute difference in degrees.
-        """
-        diff = np.abs(a1 - a2) % 360
-        return min(diff, 360 - diff)
+    def _map_to_negative_270_270(angle):
+        """Map angle from 0-360 back to -270 to 270."""
+        return angle - 360 if angle > 270 else angle
 
     @staticmethod
     def _compute_pan_tilt(Lx, Ly, h, x, y):
@@ -76,10 +71,20 @@ class PanTiltPredictor:
             total_error = 0
             for (x, y, pan_obs, tilt_obs) in self.four_points:
                 pan_calc, tilt_calc = self._compute_pan_tilt(Lx, Ly, h, x, y)
-                pan_diff = self._angle_difference(pan_calc, pan_obs)
-                tilt_diff = tilt_calc - tilt_obs
-                # Accumulate squared differences
-                total_error += pan_diff**2 + tilt_diff**2
+                # Convert pan angles to radians for vector representation
+                pan_obs_rad = np.radians(pan_obs)
+                pan_calc_rad = np.radians(pan_calc)
+                # Compute vector components
+                cos_obs = np.cos(pan_obs_rad)
+                sin_obs = np.sin(pan_obs_rad)
+                cos_calc = np.cos(pan_calc_rad)
+                sin_calc = np.sin(pan_calc_rad)
+                # Compute pan error as squared Euclidean distance between vectors
+                pan_error = (cos_calc - cos_obs)**2 + (sin_calc - sin_obs)**2
+                # Compute tilt error
+                tilt_error = (tilt_calc - tilt_obs)**2
+                # Accumulate total error
+                total_error += pan_error + tilt_error
             return total_error
 
         # Initial guess: center of the stage and an arbitrary height
@@ -91,12 +96,28 @@ class PanTiltPredictor:
 
         initial_guess = [initial_Lx, initial_Ly, initial_h]
 
+        # Define bounds to ensure meaningful optimization
+        # Assuming the light is above the stage, set reasonable bounds
+        stage_min_x = min(x_coords) - 10
+        stage_max_x = max(x_coords) + 10
+        stage_min_y = min(y_coords) - 10
+        stage_max_y = max(y_coords) + 10
+        h_min = 1.0   # Minimum height
+        h_max = 100.0 # Maximum height
+
+        bounds = [
+            (stage_min_x, stage_max_x),  # Lx bounds
+            (stage_min_y, stage_max_y),  # Ly bounds
+            (h_min, h_max)               # h bounds
+        ]
+
         # Perform optimization to minimize the error function
         result = minimize(
             error_function,
             initial_guess,
-            method='Nelder-Mead',
-            options={'xtol': 1e-6, 'ftol': 1e-6, 'maxiter': 10000}
+            method='L-BFGS-B',
+            bounds=bounds,
+            options={'ftol': 1e-12, 'maxiter': 10000}
         )
 
         if result.success:
@@ -107,19 +128,24 @@ class PanTiltPredictor:
         else:
             raise RuntimeError("Optimization failed to determine the light position.")
 
-    def predict_pan_tilt(self, x, y):
+    def predict_pan_tilt(self, x, y, return_original_format=True):
         """
         Predict the pan and tilt angles for a given (x, y) point.
 
         Parameters:
         - x, y: Coordinates of the target point in feet.
+        - return_original_format: If True, outputs pan in -270 to 270 format.
 
         Returns:
         - Tuple containing:
-            (pan in degrees [0-360], tilt in degrees [0-90])
+            (pan in degrees, tilt in degrees [0-90])
         """
         Lx, Ly, h = self.light_position
         pan, tilt = self._compute_pan_tilt(Lx, Ly, h, x, y)
+
+        if return_original_format:
+            pan = self._map_to_negative_270_270(pan)
+
         return pan, tilt
 
     def get_light_position(self):
@@ -130,18 +156,3 @@ class PanTiltPredictor:
         - Tuple containing (Lx, Ly, h) in feet.
         """
         return self.light_position
-
-# -------------------- Example Usage --------------------
-
-def feet_inches_to_feet(feet, inches):
-    """
-    Convert feet and inches to decimal feet.
-
-    Parameters:
-    - feet: Feet component (int or float).
-    - inches: Inches component (int or float).
-
-    Returns:
-    - Total feet as a float.
-    """
-    return feet + inches / 12.0

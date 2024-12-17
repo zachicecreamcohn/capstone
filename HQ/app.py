@@ -1,47 +1,55 @@
 import json
-import tkinter as tk
-from gevent import pywsgi, sleep, spawn
-from geventwebsocket.handler import WebSocketHandler
+import sys
+import threading
+import time
+import logging
+import queue
 from collections import defaultdict
-from gevent.lock import Semaphore
+from threading import Lock
+
+from PyQt5 import QtCore, QtWidgets
+from PyQt5.QtCore import pyqtSignal, QObject
+
+import asyncio
+import websockets
+
 from navigator import Navigator, Phase
 from GUI import SensorGUI
-import logging
-from EOS import EOS  # Ensure EOS module is correctly imported
+from EOS import EOS
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-# disable debug logging for this page
+# Disable debug logging for this page
 logging.getLogger().setLevel(logging.INFO)
+
+# Define a QObject to handle signals between threads and GUI
+class Communicator(QObject):
+    update_label = pyqtSignal(str)
+
 class LightControlApp:
     def __init__(self, debounce_interval=0.1, debounce_enabled=True):
         self.sensor_data = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         self.buffers = defaultdict(list)
-        self.lock = Semaphore()
+        self.lock = Lock()
         self.debounce_interval = debounce_interval
         self.debounce_enabled = debounce_enabled
         self.gui = None
 
         self.eos = EOS("192.168.1.105", 8000)
-        spawn(self.run_gui)
-        sleep(1)  # wait for gui to start
+        self.comm = Communicator()
+        self.comm.update_label.connect(self.update_gui_label)
 
-        # Pass sensor_data and lock to Navigator
+        # Queue for inter-thread communication
+        self.progress_queue = queue.Queue()
+
+        # Initialize Navigator with sensor_data and lock
         self.navigator = Navigator(eos=self.eos, sensor_data=self.sensor_data, gui=self.gui, lock=self.lock)
 
-        spawn(self.debounce_loop)
-        spawn(self.navigator_loop)
-
-    def run_gui(self):
-        root = tk.Tk()
-        self.gui = SensorGUI(root, eos=self.eos)
-        try:
-            while True:
-                root.update_idletasks()
-                root.update()
-                sleep(0.02)
-        except tk.TclError:
-            logging.info("GUI closed.")
+    def update_gui_label(self, message):
+        if self.gui and hasattr(self.gui, 'progress_label'):
+            self.gui.progress_label.setText(message)
+        else:
+            logging.info(f"GUI Label Update: {message}")
 
     def add_sensor_reading(self, sensor_ID, intensity):
         sensor_ID = int(sensor_ID)
@@ -64,10 +72,10 @@ class LightControlApp:
                             self.sensor_data[sensor_ID] = avg_intensity
                             logging.debug(f"Debounced sensor {sensor_ID}: {avg_intensity}")
                             self.buffers[sensor_ID] = []
-            sleep(self.debounce_interval)
+            time.sleep(self.debounce_interval)
 
     def navigator_loop(self):
-        sleep(1)  # Shortened wait for quicker startup
+        time.sleep(1)  # Shortened wait for quicker startup
         logging.info("Navigator loop started.")
 
         while True:
@@ -79,27 +87,19 @@ class LightControlApp:
                 current_phase = navigator_state["current_phase"]
                 if current_phase == Phase.FAILED:
                     logging.info(f"Navigator failed. Resetting sensor positions.")
-                    sleep(5)
+                    time.sleep(5)
                 elif current_phase == Phase.COMPLETE:
                     for sensor_ID in self.sensor_data:
                         logging.info(f"Sensor {sensor_ID}: {self.eos.get_sensor_data(sensor_ID)}")
                 else:
-                    sleep(0.2)
+                    time.sleep(0.2)
+            else:
+                time.sleep(0.2)
 
-    def websocket_handler(self, environ, start_response):
-        ws = environ.get('wsgi.websocket')
-        if ws is None:
-            start_response('400 Bad Request', [('Content-Type', 'text/plain')])
-            return [b'WebSocket connection expected']
-
+    async def websocket_handler(self, websocket, path):
         logging.info("WebSocket connection established.")
         try:
-            while True:
-                message = ws.receive()
-                if message is None:
-                    logging.info("WebSocket connection closed by client.")
-                    break
-
+            async for message in websocket:
                 logging.debug(f"Received message: {message}")
                 try:
                     json_data = json.loads(message)
@@ -111,23 +111,49 @@ class LightControlApp:
                     else:
                         error_msg = "Invalid data format."
                         logging.warning(error_msg)
-                        ws.send(json.dumps({"error": error_msg}))
+                        await websocket.send(json.dumps({"error": error_msg}))
                 except json.JSONDecodeError:
                     error_msg = "Invalid JSON format."
                     logging.warning(error_msg)
-                    ws.send(json.dumps({"error": error_msg}))
+                    await websocket.send(json.dumps({"error": error_msg}))
                 except Exception as e:
                     error_msg = f"Server error: {str(e)}"
                     logging.error(error_msg)
-                    ws.send(json.dumps({"error": error_msg}))
+                    await websocket.send(json.dumps({"error": error_msg}))
+        except websockets.exceptions.ConnectionClosed:
+            logging.info("WebSocket connection closed by client.")
         except Exception as e:
             logging.error(f"WebSocket handler error: {str(e)}")
         finally:
             logging.info("WebSocket connection handler terminating.")
-        return []
+
+    async def websocket_server_coroutine(self):
+        async with websockets.serve(self.websocket_handler, '0.0.0.0', 8765):
+            logging.info("WebSocket server running on ws://0.0.0.0:8765")
+            await asyncio.Future()  # Run forever
+
+    def run_websocket_server(self):
+        try:
+            asyncio.run(self.websocket_server_coroutine())
+        except Exception as e:
+            logging.error(f"WebSocket server encountered an error: {e}")
+
+    def start_background_threads(self):
+        threading.Thread(target=self.debounce_loop, daemon=True).start()
+        threading.Thread(target=self.navigator_loop, daemon=True).start()
+        threading.Thread(target=self.run_websocket_server, daemon=True).start()
+
+    def start(self):
+        app = QtWidgets.QApplication(sys.argv)
+        self.gui = SensorGUI(eos=self.eos)
+        self.comm.update_label.connect(self.update_gui_label)
+        self.gui.show()
+
+        # Start background threads after GUI is initialized
+        self.start_background_threads()
+
+        sys.exit(app.exec_())
 
 if __name__ == '__main__':
     app = LightControlApp(debounce_interval=0.1)
-    server = pywsgi.WSGIServer(('0.0.0.0', 8765), app.websocket_handler, handler_class=WebSocketHandler)
-    logging.info("WebSocket server running on ws://0.0.0.0:8765")
-    server.serve_forever()
+    app.start()

@@ -6,7 +6,6 @@ import logging
 from collections import deque
 from threading import Lock
 
-# Configure logging at the beginning of your main script
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -207,6 +206,7 @@ class Navigator:
 
         with open("sensor_history.json", "w") as f:
             json.dump(self.sensor_history, f, indent=4)
+
 
         return Phase.COMPLETE
 

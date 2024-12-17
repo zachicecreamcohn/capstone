@@ -1,11 +1,10 @@
 import tkinter as tk
 
 class SensorGUI:
-    def __init__(self, master, eos=None):
+    def __init__(self, master, eos=None, recalibrate_state=None):
         self.master = master
         self.eos = eos
         self.master.title("Sensor Positioning")
-        self.recalibrate = not self.eos.sensors_data_file_is_valid() if self.eos else False
 
         self.canvas_width = 800
         self.canvas_height = 600
@@ -27,6 +26,9 @@ class SensorGUI:
         self.lock_button = tk.Button(self.master, text="Toggle Lock", command=self.toggle_lock)
         self.lock_button.pack(pady=10)
 
+        self.recalibrate_button = tk.Button(self.master, text="Recalibrate", command=self.recalibrate)
+        self.recalibrate_button.pack(pady=10)
+
         self.lock_sensors = False
         self.canvas.bind("<Button-1>", self.on_click)
 
@@ -43,6 +45,10 @@ class SensorGUI:
         self.canvas.tag_bind(f"sensor_{sensor_id}", "<B1-Motion>", self.drag)
 
         self.sensors[sensor_id] = rect
+
+    def recalibrate(self):
+        # TODO: Implement recalibration logic
+        pass
 
     def toggle_lock(self):
         self.lock_sensors = not self.lock_sensors

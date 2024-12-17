@@ -20,9 +20,10 @@ logging.basicConfig(
 )
 
 class EOS(object):
-    def __init__(self, ip: str, port: int) -> None:
+    def __init__(self, ip: str, port: int, recalibrate_state: dict = {"recalibrate": False}):
         self.ip = ip
         self.port = port
+        self.recalibrate_state = recalibrate_state
         self.client = udp_client.SimpleUDPClient(ip, port)
         self.sensor_data= {1:{"pan":0.0,"tilt":0.0, "direction": 1}, 2:{"pan":0.0,"tilt":0.0, "direction": 1}, 3:{"pan":0.0,"tilt":0.0, "direction": 1}, 4:{"pan":0.0,"tilt":0.0, "direction": 1}}
 
@@ -87,8 +88,7 @@ class EOS(object):
         with open(".sensors.json", "r") as f:
             self.sensor_data = json.load(f)
 
-
-        return self.sensor_data[sensor_id]
+        return self.sensor_data[str(sensor_id)]
 
     def sensors_data_file_is_valid(self) -> bool:
         if os.path.exists(".sensors.json"):
@@ -98,7 +98,7 @@ class EOS(object):
                 if "pan" not in self.sensor_data[sensor_id] or "tilt" not in self.sensor_data[sensor_id]:
                     logging.error(f"Sensor data for sensor {sensor_id} is invalid.")
                     return False
-            logging.info("Sensor data file found and loaded.")
+            logging.debug("Sensor data file found and loaded.")
             return True
         logging.error("Sensor data file not found.")
         return False

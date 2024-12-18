@@ -494,8 +494,8 @@ class SensorGUI(QtWidgets.QWidget):
                     for sensor_id, pos in sensor_positions.items()
                 }
                 stage_height = self.feet_inches_to_feet(self.stage_dimensions["height_feet"], self.stage_dimensions["height_inches"])
-                # TODO have the user choose the channel instead of hardcoding it like it is here
-                self.eos.move_to_point(x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions, channel=self.active_channel)
+                if self.lock_sensors:
+                    self.eos.move_to_point(x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions, channel=self.active_channel)
 
 
 

@@ -89,8 +89,7 @@ class LightControlApp:
                     logging.info(f"Navigator failed. Resetting sensor positions.")
                     time.sleep(5)
                 elif current_phase == Phase.COMPLETE:
-                    for sensor_ID in self.sensor_data:
-                        logging.info(f"Sensor {sensor_ID}: {self.eos.get_sensor_data(sensor_ID)}")
+                    logging.info(f"Navigator complete.")
                 else:
                     time.sleep(0.2)
             else:

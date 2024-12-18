@@ -194,7 +194,7 @@ class Navigator:
         logging.info("Calculated best pan/tilt for each sensor.")
 
         for sensor_id in self.sensor_history[channel]:
-            logging.info(f"Sensor {sensor_id}: {self.eos.get_sensor_data(sensor_id)}")
+            logging.info(f"Sensor {sensor_id}: {self.eos.get_sensor_data(sensor_id, channel)}")
 
 
 

@@ -15,7 +15,6 @@ class Phase(Enum):
     SETUP = "setup"
     LOCATE = "locate"
     COMPLETE = "complete"
-    CALCULATE = "calculate"
     FAILED = "failed"
 
 class Navigator:
@@ -26,22 +25,11 @@ class Navigator:
         self.pan = 0.0  # Current pan angle
         self.tilt = 0.0  # Current tilt angle
         self.best_intensity = -1
-        self.sensor_baselines = {}
         self.sensor_data = sensor_data if sensor_data is not None else {}
         self.lock = lock if lock is not None else Lock()
         self.sensor_history = {}
 
 
-        # Parameters for centroid-based navigation
-        self.initial_step_size = 15.0  # degrees
-        self.step_size = self.initial_step_size  # Current step size
-        self.min_step_size = 0.1  # Minimum step size for fine adjustments
-        self.step_decrement = 0.5  # How much to reduce step size after certain steps
-        self.max_steps = 1500  # Prevent infinite loops
-        self.tolerance = 2.0  # Centroid distance tolerance (units consistent with sensor positions)
-
-        # Threshold to determine if sensor data is close to baseline
-        self.baseline_threshold = 0.1  # Adjust as needed
 
         # Parameters for moving average filter
         self.history_length = 5  # Number of samples for moving average
@@ -52,11 +40,8 @@ class Navigator:
         else:
             logging.error("GUI object is not provided. Sensor history cannot be initialized.")
 
-        # Mechanical constraints (adjust as per your hardware specifications)
-        self.min_pan, self.max_pan = self.eos.get_pan_range("r1")
-        self.min_tilt, self.max_tilt = self.eos.get_tilt_range("r1")
 
-    def send_light_command(self, pan_move, tilt_move, use_degrees=True):
+    def send_light_command(self, pan_move, tilt_move, use_degrees=True, channel=1):
         """
         Sends pan and tilt commands to the EOS controller and updates current angles.
         Ensures that the new angles are within mechanical constraints.
@@ -66,8 +51,10 @@ class Navigator:
         proposed_tilt = self.tilt + tilt_move
 
         # Clamp angles within mechanical limits
-        proposed_pan = max(self.min_pan, min(self.max_pan, proposed_pan))
-        proposed_tilt = max(self.min_tilt, min(self.max_tilt, proposed_tilt))
+        channel_min_tilt, channel_max_tilt = self.eos.get_tilt_range(channel)
+        channel_min_pan, channel_max_pan = self.eos.get_pan_range(channel)
+        proposed_pan = max(channel_min_pan, min(channel_max_pan, proposed_pan))
+        proposed_tilt = max(channel_min_tilt, min(channel_max_tilt, proposed_tilt))
 
         # Calculate actual movement after clamping
         actual_pan_move = proposed_pan - self.pan
@@ -76,8 +63,8 @@ class Navigator:
         # Send commands only if there's a change
         if actual_pan_move != 0 or actual_tilt_move != 0:
             try:
-                self.eos.set_pan(1, self.pan, actual_pan_move, "r1", use_degrees)
-                self.eos.set_tilt(1, self.tilt, actual_tilt_move, "r1", use_degrees)
+                self.eos.set_pan(channel, self.pan, actual_pan_move, use_degrees)
+                self.eos.set_tilt(channel, self.tilt, actual_tilt_move, use_degrees)
                 self.pan = proposed_pan
                 self.tilt = proposed_tilt
                 logging.debug(f"Sent pan_move: {actual_pan_move}, tilt_move: {actual_tilt_move}. New pan: {self.pan}, New tilt: {self.tilt}")
@@ -88,27 +75,18 @@ class Navigator:
             logging.debug("Pan and tilt moves are within mechanical limits. No movement sent.")
 
     def setup_phase(self):
-        """
-        Initializes the system by resetting pan and tilt, setting intensity,
-        and establishing sensor baselines.
-        """
         logging.info("Entering SETUP phase.")
         initial_pan, initial_tilt = 0, 0
-        self.send_light_command(initial_pan, initial_tilt)
-        try:
-            self.eos.set_intensity(1, 0)  # Set light intensity to a known value
-            logging.debug("Set light intensity to 0.")
-        except Exception as e:
-            logging.error(f"Failed to set light intensity: {e}")
+        fixtures = self.eos.get_list_of_fixtures()
+        for channel in fixtures:
+            self.eos.set_intensity(channel, 0)
+            self.eos.set_pan(channel, 0, initial_pan, use_degrees=True)
+            self.eos.set_tilt(channel, 0, initial_tilt, use_degrees=True)
 
         sleep(5)  # Wait for system to stabilize
 
-        # Set baselines using moving average filter
-        self.sensor_baselines = self.get_new_data()
-        logging.info(f"Sensor baselines: {self.sensor_baselines}")
-
         # Initialize best_intensity based on target sensor
-        self.eos.set_intensity(1, 100)
+
         logging.debug(f"Setup complete. Baseline intensity: {self.best_intensity}")
 
         return Phase.LOCATE
@@ -117,71 +95,85 @@ class Navigator:
         # move in expanding concentric circles until the taret sensor picks up significant changes
         logging.info("Entering EXPLORE phase.")
 
-        # Move the light in a spiral pattern
-        max_tilt = self.eos.get_tilt_range("r1")[1]
-        min_pan, max_pan = self.eos.get_pan_range("r1")
-        pan_move_step = 1
-        tilt_move_step = 1
+        fixtures = self.eos.get_list_of_fixtures()
+        for channel in fixtures:
+            self.eos.set_intensity(channel, 100)
+            # turn off all other fixtures
+            for other_channel in fixtures:
+                if other_channel != channel:
+                    self.eos.set_intensity(other_channel, 0)
+            self.sensor_history[channel] = {}
 
-        self.send_light_command(min_pan, 0, use_degrees=True)
+            # Move the light in a spiral pattern
+            max_tilt = self.eos.get_tilt_range(channel)[1]
+            min_pan, max_pan = self.eos.get_pan_range(channel)
+            pan_move_step = 1
+            tilt_move_step = 20 # TODO: switch back to 1
 
-
-        scan_pan = min_pan
-        scan_tilt = 0
-        direction = 1
-        max_scan_tilt = 85
-        while True:
-            # set tilt
-            for i in range(0, max_pan, pan_move_step):
-                self.eos.set_pan(1,0,scan_pan, "r1", use_degrees=True)
-                self.eos.set_tilt(1,0,scan_tilt, "r1", use_degrees=True)
-                self.pan = scan_pan
-                self.tilt = scan_tilt
-                sleep(0.02)
-
-                # get the intensity data for each sensor and store it in history with the pan/tilt values
-                sensor_data = self.get_new_data()
-                for sensor_id, intensity in sensor_data.items():
-                    if sensor_id not in self.sensor_history:
-                        self.sensor_history[sensor_id] = []
-                    self.sensor_history[sensor_id].append({"intensity": intensity, "pan": scan_pan, "tilt": scan_tilt, "direction": direction})
-
-                scan_pan += pan_move_step * direction
+            self.send_light_command(min_pan, 0, use_degrees=True, channel=channel)
 
 
-            if direction == 1 and scan_pan >= max_pan:
-                direction = -1
-                scan_pan = max_pan
-                scan_tilt += tilt_move_step
-                if scan_tilt > max_tilt:
+            scan_pan = min_pan
+            scan_tilt = 0
+            direction = 1
+            max_scan_tilt = 85
+            while True:
+                # set tilt
+                for i in range(0, max_pan, pan_move_step):
+                    self.eos.set_pan(channel,0,scan_pan, use_degrees=True)
+                    self.eos.set_tilt(channel,0,scan_tilt, use_degrees=True)
+                    self.pan = scan_pan
+                    self.tilt = scan_tilt
+                    sleep(0.02)
+
+                    # get the intensity data for each sensor and store it in history with the pan/tilt values
+                    sensor_data = self.get_new_data()
+                    for sensor_id, intensity in sensor_data.items():
+                        if sensor_id not in self.sensor_history[channel]:
+                            self.sensor_history[channel][sensor_id] = []
+                        # self.sensor_history[sensor_id].append({"intensity": intensity, "pan": scan_pan, "tilt": scan_tilt, "direction": direction})
+                        self.sensor_history[channel][sensor_id].append({"intensity": intensity, "pan": scan_pan, "tilt": scan_tilt, "direction": direction})
+
+                    scan_pan += pan_move_step * direction
+
+
+                if direction == 1 and scan_pan >= max_pan:
+                    direction = -1
+                    scan_pan = max_pan
+                    scan_tilt += tilt_move_step
+                    if scan_tilt > max_tilt:
+                        break
+                elif direction == -1 and scan_pan <= min_pan:
+                    direction = 1
+                    scan_pan = min_pan
+                    scan_tilt += tilt_move_step
+                    if scan_tilt > max_tilt:
+                        break
+                if (abs(scan_tilt) > max_scan_tilt):
+                    logging.info("End of scan")
+                    self.eos.set_intensity(channel, 0)
+                    # TODO don't hardcode the channel here
+                    self.eos.set_pan(channel, 0, 0, use_degrees=True)
+                    self.eos.set_tilt(channel, 0, 0, use_degrees=True)
                     break
-            elif direction == -1 and scan_pan <= min_pan:
-                direction = 1
-                scan_pan = min_pan
-                scan_tilt += tilt_move_step
-                if scan_tilt > max_tilt:
-                    break
-            if (abs(scan_tilt) > max_scan_tilt):
-                logging.info("End of scan")
-                self.eos.set_intensity(1, 0)
-                self.eos.set_pan(1, 0, 0, "r1", use_degrees=True)
-                self.eos.set_tilt(1, 0, 0, "r1", use_degrees=True)
-                break
+
+            self.calculate(channel)
 
 
-        # write the entire deque to a file
+
         with open("sensor_history.json", "w") as f:
             json.dump(self.sensor_history, f)
-        # Calculate centroid of sensor datae
-        return Phase.CALCULATE
 
-    def calculate_phase(self):
+
+        return Phase.COMPLETE
+
+    def calculate(self, channel):
         """
         Looks through the entire history of sensor data and calculates the
         pan/tilt values that correspond to the highest intensity for each sensor.
         """
         logging.info("Entering CALCULATE phase.")
-        for sensor_id, history in self.sensor_history.items():
+        for sensor_id, history in self.sensor_history[channel].items():
             max_intensity = -1
             best_pan = 0
             best_tilt = 0
@@ -197,33 +189,13 @@ class Navigator:
                     best_direction = record["direction"]
             logging.info(f"Sensor {sensor_id} max intensity: {max_intensity} at pan: {best_pan}, tilt: {best_tilt}")
             corrected_pan = self.predict_corrected_pan_nonlinear(best_pan, best_tilt, best_direction)
-            self.eos.set_sensor_data(sensor_id, corrected_pan, best_tilt, best_direction)
+            self.eos.set_sensor_data(sensor_id, corrected_pan, best_tilt, best_direction, channel)
 
         logging.info("Calculated best pan/tilt for each sensor.")
 
-        for sensor_id in self.sensor_history:
+        for sensor_id in self.sensor_history[channel]:
             logging.info(f"Sensor {sensor_id}: {self.eos.get_sensor_data(sensor_id)}")
 
-        with open("sensor_history.json", "w") as f:
-            json.dump(self.sensor_history, f, indent=4)
-
-
-        return Phase.COMPLETE
-
-    def is_close_to_baseline(self):
-        """
-        Checks if all sensor intensities are close to their baseline values.
-        Returns True if all sensors are within the baseline threshold, else False.
-        """
-        current_data = self.get_new_data()
-        for sensor_id, data in self.sensor_baselines.items():
-            current_intensity = current_data.get(sensor_id, {}).get("intensity", 0)
-            baseline_intensity = data.get("intensity", 0)
-            if abs(current_intensity - baseline_intensity) > self.baseline_threshold:
-                logging.debug(f"Sensor {sensor_id} intensity {current_intensity} is not close to baseline {baseline_intensity}.")
-                return False
-        logging.debug("All sensor intensities are close to their baselines.")
-        return True
 
 
     def get_new_data(self):
@@ -242,8 +214,6 @@ class Navigator:
             self.current_phase = self.setup_phase()
         elif self.current_phase == Phase.LOCATE:
             self.current_phase = self.locate_phase()
-        elif self.current_phase == Phase.CALCULATE:
-            self.current_phase = self.calculate_phase()
 
         status = {
             "current_phase": self.current_phase.name,

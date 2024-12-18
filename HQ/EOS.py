@@ -5,13 +5,6 @@ import os
 from PanTiltPredictor import PanTiltPredictor
 
 # Fixture data with pan and tilt ranges
-fixture_data = {
-    "r1": {
-        "pan": (-270, 270),
-        "tilt": (-115, 115),
-        "zoom": (12,49),
-    }
-}
 
 current_data = {}
 
@@ -21,12 +14,63 @@ logging.basicConfig(
 )
 
 class EOS(object):
-    def __init__(self, ip: str, port: int, recalibrate_state: dict = {"recalibrate": False}):
+    def __init__(self, ip: str, port: int, recalibrate_state: dict = {"recalibrate": False}, fixtures_file: str = ".fixtures.json"):
         self.ip = ip
         self.port = port
         self.recalibrate_state = recalibrate_state
         self.client = udp_client.SimpleUDPClient(ip, port)
-        self.sensor_data= {1:{"pan":0.0,"tilt":0.0, "direction": 1}, 2:{"pan":0.0,"tilt":0.0, "direction": 1}, 3:{"pan":0.0,"tilt":0.0, "direction": 1}, 4:{"pan":0.0,"tilt":0.0, "direction": 1}}
+        self.sensor_data= {1:{1:{"pan":0.0,"tilt":0.0, "direction": 1}, 2:{"pan":0.0,"tilt":0.0, "direction": 1}, 3:{"pan":0.0,"tilt":0.0, "direction": 1}, 4:{"pan":0.0,"tilt":0.0, "direction": 1}}}
+        self.fixtures_file = fixtures_file
+        self.fixture_data = self.load_fixtures()
+
+    def load_fixtures(self):
+        """
+        Load fixture data from .fixtures.json. Create the file if it doesn't exist.
+        """
+        if not os.path.exists(self.fixtures_file):
+            with open(self.fixtures_file, "w") as f:
+                json.dump({}, f)  # Initialize with an empty dictionary
+            logging.info(f"{self.fixtures_file} created.")
+
+        try:
+            with open(self.fixtures_file, "r") as f:
+                fixture_data = json.load(f)
+                logging.info(f"Fixture data loaded: {fixture_data}")
+                return fixture_data
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode {self.fixtures_file}. Resetting file.")
+            with open(self.fixtures_file, "w") as f:
+                json.dump({}, f)
+            return {}
+
+    def save_fixtures(self):
+        """
+        Save the current fixture data to the .fixtures.json file.
+        """
+        with open(self.fixtures_file, "w") as f:
+            json.dump(self.fixture_data, f, indent=4)
+        logging.info("Fixture data saved successfully.")
+
+    def get_list_of_fixtures(self):
+        # reread fixtures file
+        self.fixture_data = self.load_fixtures()
+        return list(self.fixture_data.keys())
+
+    def get_pan_range(self, channel: str):
+        """
+        Retrieve the pan range for a specific fixture.
+        """
+        if channel in self.fixture_data:
+            return tuple(self.fixture_data[channel].get("pan", (-270, 270)))
+        raise ValueError(f"Fixture '{channel}' not found in fixture_data.")
+
+    def get_tilt_range(self, channel: str):
+        """
+        Retrieve the tilt range for a specific fixture.
+        """
+        if channel in self.fixture_data:
+            return tuple(self.fixture_data[channel].get("tilt", (-115, 115)))
+        raise ValueError(f"Fixture '{channel}' not found in fixture_data.")
 
     def send(self, message: str, value: str or int or float):
         self.client.send_message(message, value)
@@ -41,27 +85,23 @@ class EOS(object):
         """Maps a percentage (0-100) to a value within the specified range."""
         return (percent / 100) * (max_value - min_value) + min_value
 
-    def get_pan_range(self, fixture_name: str):
-        return fixture_data[fixture_name]["pan"]
+    def set_pan(self, channel: int, current_value: float, move_value: float, use_degrees: bool = False):
+            channel_str = str(channel)
+            if channel_str in self.fixture_data:
+                pan_min, pan_max = self.get_pan_range(channel_str)
+                actual_pan_value = self._convert_value(move_value, use_degrees, pan_min, pan_max, current_value)
+                self.set_parameter(channel, "pan", actual_pan_value)
+                if channel not in current_data:
+                    current_data[channel] = {}
 
-    def get_tilt_range(self, fixture_name: str):
-        return fixture_data[fixture_name]["tilt"]
+                current_data[channel]["pan"] = actual_pan_value
+            else:
+                raise ValueError(f"Channel '{channel}' not found in fixture_data.")
 
-    def set_pan(self, channel: int, current_value: float, move_value: float, fixture_name: str, use_degrees: bool = False) -> None:
-        if fixture_name in fixture_data:
-            pan_min, pan_max = fixture_data[fixture_name]["pan"]
-            actual_pan_value = self._convert_value(move_value, use_degrees, pan_min, pan_max, current_value)
-            self.set_parameter(channel, "pan", actual_pan_value)
-            if channel not in current_data:
-                current_data[channel] = {}
-
-            current_data[channel]["pan"] = actual_pan_value
-        else:
-            raise ValueError(f"Fixture '{fixture_name}' not found in fixture_data")
-
-    def set_tilt(self, channel: int, current_value: float, move_value: float, fixture_name: str, use_degrees: bool = False) -> None:
-        if fixture_name in fixture_data:
-            tilt_min, tilt_max = fixture_data[fixture_name]["tilt"]
+    def set_tilt(self, channel: int, current_value: float, move_value: float, use_degrees: bool = False):
+        channel_str = str(channel)
+        if channel_str in self.fixture_data:
+            tilt_min, tilt_max = self.get_tilt_range(channel_str)
             actual_tilt_value = self._convert_value(move_value, use_degrees, tilt_min, tilt_max, current_value)
             self.set_parameter(channel, "tilt", actual_tilt_value)
             if channel not in current_data:
@@ -69,7 +109,7 @@ class EOS(object):
 
             current_data[channel]["tilt"] = actual_tilt_value
         else:
-            raise ValueError(f"Fixture '{fixture_name}' not found in fixture_data")
+            raise ValueError(f"Channel '{channel}' not found in fixture_data.")
 
     def get_pan(self, channel: int) -> float:
         return current_data[channel]["pan"]
@@ -77,8 +117,16 @@ class EOS(object):
     def get_tilt(self, channel: int) -> float:
         return current_data[channel]["tilt"]
 
-    def set_sensor_data(self, sensor_id: int, pan: float, tilt: float, direction: int) -> None:
-        self.sensor_data[sensor_id] = {"pan": pan, "tilt": tilt, "direction": direction}
+    def set_sensor_data(self, sensor_id: int, pan: float, tilt: float, direction: int, channel) -> None:
+
+        if channel not in self.sensor_data:
+            self.sensor_data[channel] = {}
+
+        if sensor_id not in self.sensor_data[channel]:
+            self.sensor_data[channel][sensor_id] = {}
+
+        self.sensor_data[channel][sensor_id] = {"pan": pan, "tilt": tilt, "direction": direction}
+
         # write to local .sensors file
         with open(".sensors.json", "w") as f:
             json.dump(self.sensor_data, f)
@@ -96,10 +144,6 @@ class EOS(object):
         if os.path.exists(".sensors.json"):
             with open(".sensors.json", "r") as f:
                 self.sensor_data = json.load(f)
-            for sensor_id in self.sensor_data:
-                if "pan" not in self.sensor_data[sensor_id] or "tilt" not in self.sensor_data[sensor_id]:
-                    logging.error(f"Sensor data for sensor {sensor_id} is invalid.")
-                    return False
             logging.debug("Sensor data file found and loaded.")
             return True
         logging.error("Sensor data file not found.")
@@ -118,10 +162,11 @@ class EOS(object):
                 raise ValueError(f"Requested move {move_value}% results in {new_value}°, which is out of range ({min_value}° to {max_value}°)")
             return float(new_value)
 
-    def move_to_point(self, x, y, stage_max_y, sensor_coords: dict):
+    def move_to_point(self, x, y, stage_max_y, sensor_coords: dict, channel: int):
         """
         Expects sensor_coords to be a dictionary with sensor_id as key and a tuple of (x, y) as value.
         """
+        channel_string=f'{channel}'
         # TODO: Make sensor data specific to fixture when storing.
         sensor1_data = self.get_sensor_data(1)
         sensor2_data = self.get_sensor_data(2)
@@ -135,8 +180,8 @@ class EOS(object):
 
         pan, tilt = self.predict(x, y, reference_point1, reference_point2, reference_point3, reference_point4, stage_max_y)
         print(f"Pan: {pan}, Tilt: {tilt}")
-        self.set_pan(1, 0, pan, "r1", use_degrees=True)
-        self.set_tilt(1, 0, tilt, "r1", use_degrees=True)
+        self.set_pan(channel, 0, pan, channel_string, use_degrees=True)
+        self.set_tilt(channel, 0, tilt, channel_string, use_degrees=True)
 
     @staticmethod
     def invert_y(y, max_y):

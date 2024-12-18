@@ -58,6 +58,7 @@ class SensorGUI(QtWidgets.QWidget):
         self.view.setGeometry(10, 10, 960, 600)  # Adjusted size
         self.view.setRenderHint(QtGui.QPainter.Antialiasing)
         self.view.viewport().installEventFilter(self)  # Event filter for mouse clicks
+        self.active_channel = 1
 
         # Create sensor rectangles
         self.sensors = {}
@@ -65,6 +66,7 @@ class SensorGUI(QtWidgets.QWidget):
         self.create_sensor(2, 700, 100)
         self.create_sensor(3, 100, 500)
         self.create_sensor(4, 700, 500)
+
 
         # Create Buttons
         self.print_button = QtWidgets.QPushButton("Print Sensor Positions", self)
@@ -162,6 +164,39 @@ class SensorGUI(QtWidgets.QWidget):
         self.set_bg_scale_button = QtWidgets.QPushButton("Set Scale", self)
         self.set_bg_scale_button.setGeometry(490, 740, 100, 30)
         self.set_bg_scale_button.clicked.connect(self.set_background_scale)
+
+        # add a dropdown to select the channel
+        self.channel_label = QtWidgets.QLabel("Channel:", self)
+        self.channel_label.setGeometry(10, 780, 200, 30)
+        # when the channel is changed, update the active channel
+        self.channel_combo = QComboBox(self)
+        self.channel_combo.setGeometry(130, 780, 150, 30)
+        self.channel_combo.addItems(self.get_channels_list())
+        self.channel_combo.currentTextChanged.connect(self.select_channel)
+        # TODO: update the combo box when the fixture data is updated
+
+
+
+
+        # Add button to edit fixture data
+        self.edit_fixtures_button = QtWidgets.QPushButton("Edit Fixtures", self)
+        # position it on next row of buttons
+        self.edit_fixtures_button.setGeometry(10, 820, 200, 30)
+        self.edit_fixtures_button.clicked.connect(self.open_fixture_editor)
+
+
+
+    def get_channels_list(self):
+        return self.eos.get_list_of_fixtures()
+
+    def select_channel(self, channel):
+        self.active_channel = channel
+
+    def update_channel_combo(self):
+        self.channel_combo.clear()
+        self.channel_combo.addItems(self.get_channels_list())
+        self.progress_label.setText("Status: Channel list updated.")
+        logging.info("Channel list repopulated after saving fixtures.")
 
     def toggle_background_edit(self, checked):
         """
@@ -455,7 +490,8 @@ class SensorGUI(QtWidgets.QWidget):
                     for sensor_id, pos in sensor_positions.items()
                 }
                 stage_height = self.feet_inches_to_feet(self.stage_dimensions["height_feet"], self.stage_dimensions["height_inches"])
-                self.eos.move_to_point(x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions)
+                # TODO have the user choose the channel instead of hardcoding it like it is here
+                self.eos.move_to_point(1,x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions)
 
 
 
@@ -630,6 +666,17 @@ class SensorGUI(QtWidgets.QWidget):
         logging.info("Origin setting mode enabled.")
 
 
+    def open_fixture_editor(self):
+        """
+        Opens the fixtures editor popup.
+        """
+        from fixture_editor import FixtureEditor
+        self.fixtures_window = FixtureEditor(".fixtures.json")
+        self.fixtures_window.setWindowModality(QtCore.Qt.ApplicationModal)
+
+        self.fixtures_window.data_saved.connect(self.update_channel_combo)
+
+        self.fixtures_window.show()
 
 if __name__ == "__main__":
     # Configure logging

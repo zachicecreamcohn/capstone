@@ -131,14 +131,14 @@ class EOS(object):
         with open(".sensors.json", "w") as f:
             json.dump(self.sensor_data, f)
 
-    def get_sensor_data(self, sensor_id: int) -> dict:
+    def get_sensor_data(self, sensor_id: int, channel) -> dict:
         if not self.sensors_data_file_is_valid():
             raise ValueError("Invalid sensor data file or sensor data not found.")
         with open(".sensors.json", "r") as f:
             self.sensor_data = json.load(f)
 
 
-        return self.sensor_data[str(sensor_id)]
+        return self.sensor_data[channel][str(sensor_id)]
 
     def sensors_data_file_is_valid(self) -> bool:
         if os.path.exists(".sensors.json"):
@@ -166,12 +166,10 @@ class EOS(object):
         """
         Expects sensor_coords to be a dictionary with sensor_id as key and a tuple of (x, y) as value.
         """
-        channel_string=f'{channel}'
-        # TODO: Make sensor data specific to fixture when storing.
-        sensor1_data = self.get_sensor_data(1)
-        sensor2_data = self.get_sensor_data(2)
-        sensor3_data = self.get_sensor_data(3)
-        sensor4_data = self.get_sensor_data(4)
+        sensor1_data = self.get_sensor_data(1, channel)
+        sensor2_data = self.get_sensor_data(2, channel)
+        sensor3_data = self.get_sensor_data(3, channel)
+        sensor4_data = self.get_sensor_data(4, channel)
 
         reference_point1 = (sensor_coords[1][0], sensor_coords[1][1], sensor1_data["pan"], sensor1_data["tilt"])
         reference_point2 = (sensor_coords[2][0], sensor_coords[2][1], sensor2_data["pan"], sensor2_data["tilt"])
@@ -180,8 +178,8 @@ class EOS(object):
 
         pan, tilt = self.predict(x, y, reference_point1, reference_point2, reference_point3, reference_point4, stage_max_y)
         print(f"Pan: {pan}, Tilt: {tilt}")
-        self.set_pan(channel, 0, pan, channel_string, use_degrees=True)
-        self.set_tilt(channel, 0, tilt, channel_string, use_degrees=True)
+        self.set_pan(channel, 0, pan, use_degrees=True)
+        self.set_tilt(channel, 0, tilt, use_degrees=True)
 
     @staticmethod
     def invert_y(y, max_y):

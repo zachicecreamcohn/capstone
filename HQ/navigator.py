@@ -108,7 +108,7 @@ class Navigator:
             max_tilt = self.eos.get_tilt_range(channel)[1]
             min_pan, max_pan = self.eos.get_pan_range(channel)
             pan_move_step = 1
-            tilt_move_step = 20 # TODO: switch back to 1
+            tilt_move_step = 1
 
             self.send_light_command(min_pan, 0, use_degrees=True, channel=channel)
 

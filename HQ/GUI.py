@@ -10,6 +10,7 @@ from PyQt5.QtGui import QPixmap, QPen, QColor, QBrush, QPainter
 from PyQt5.QtCore import pyqtSignal, QPointF, QRectF
 import sys
 import logging
+import os
 
 
 class SensorGUI(QtWidgets.QWidget):
@@ -171,18 +172,20 @@ class SensorGUI(QtWidgets.QWidget):
         # when the channel is changed, update the active channel
         self.channel_combo = QComboBox(self)
         self.channel_combo.setGeometry(130, 780, 150, 30)
-        self.channel_combo.addItems(self.get_channels_list())
         self.channel_combo.currentTextChanged.connect(self.select_channel)
+        self.channel_combo.addItems(self.get_channels_list())
         # TODO: update the combo box when the fixture data is updated
 
 
 
 
-        # Add button to edit fixture data
         self.edit_fixtures_button = QtWidgets.QPushButton("Edit Fixtures", self)
-        # position it on next row of buttons
         self.edit_fixtures_button.setGeometry(10, 820, 200, 30)
         self.edit_fixtures_button.clicked.connect(self.open_fixture_editor)
+
+        self.edit_sensors_button = QtWidgets.QPushButton("Edit Sensors", self)
+        self.edit_sensors_button.setGeometry(220, 820, 200, 30)
+        self.edit_sensors_button.clicked.connect(self.open_sensors_editor)
 
 
 
@@ -190,6 +193,7 @@ class SensorGUI(QtWidgets.QWidget):
         return self.eos.get_list_of_fixtures()
 
     def select_channel(self, channel):
+        print(f"Channel selected: {channel}")
         self.active_channel = channel
 
     def update_channel_combo(self):
@@ -197,6 +201,9 @@ class SensorGUI(QtWidgets.QWidget):
         self.channel_combo.addItems(self.get_channels_list())
         self.progress_label.setText("Status: Channel list updated.")
         logging.info("Channel list repopulated after saving fixtures.")
+
+        # whatever the selected channel was before, select it again
+        self.channel_combo.setCurrentText(self.active_channel)
 
     def toggle_background_edit(self, checked):
         """
@@ -391,12 +398,9 @@ class SensorGUI(QtWidgets.QWidget):
         logging.info("Scale applied.")
 
     def recalibrate(self):
-        """
-        Placeholder for recalibration logic.
-        """
-        # TODO: Implement recalibration logic
-        logging.info("Recalibrate button clicked.")
-        QMessageBox.information(self, "Recalibrate", "Recalibration is not yet implemented.")
+        # delete file ".sensors.json"
+        os.remove(".sensors.json")
+        QMessageBox.information(self, "Recalibrate", "Recalibration in progress for all fixtures.")
 
     def toggle_lock(self):
         """
@@ -491,7 +495,7 @@ class SensorGUI(QtWidgets.QWidget):
                 }
                 stage_height = self.feet_inches_to_feet(self.stage_dimensions["height_feet"], self.stage_dimensions["height_inches"])
                 # TODO have the user choose the channel instead of hardcoding it like it is here
-                self.eos.move_to_point(1,x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions)
+                self.eos.move_to_point(x=clicked_coords[0], y=clicked_coords[1], stage_max_y=stage_height, sensor_coords=sensor_positions, channel=self.active_channel)
 
 
 
@@ -677,6 +681,18 @@ class SensorGUI(QtWidgets.QWidget):
         self.fixtures_window.data_saved.connect(self.update_channel_combo)
 
         self.fixtures_window.show()
+
+    def open_sensors_editor(self):
+        """
+        Opens the sensors editor popup.
+        """
+        from sensors_editor import SensorsEditor
+        self.sensors_window = SensorsEditor(active_channel=self.active_channel)
+        self.sensors_window.setWindowModality(QtCore.Qt.ApplicationModal)
+
+        self.sensors_window.data_saved.connect(self.update_channel_combo)
+
+        self.sensors_window.show()
 
 if __name__ == "__main__":
     # Configure logging

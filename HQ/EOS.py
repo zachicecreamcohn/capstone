@@ -213,29 +213,7 @@ class EOS(object):
                 key=lambda pt: abs(pt[0] - current_pan) + abs(pt[1] - current_tilt)
             )
 
-            logging.info(f"Current Pan: {current_pan}°, Current Tilt: {current_tilt}°, Target Pan: {target_pan}°, Target Tilt: {target_tilt}°, Nearest Pan: {nearest_pan_tilt[0]}°, Nearest Tilt: {nearest_pan_tilt[1]}°")
             return nearest_pan_tilt
-
-    def _get_nearest_pan(self, channel: int, target_pan: float) -> float:
-        pan_min, pan_max = self.get_pan_range(str(channel))
-        current_pan = self.current_data.get(channel, {}).get("pan", 0.0)
-
-        # Normalize target_pan to be within -180° to +180°
-        target_pan_normalized = ((target_pan + 180) % 360) - 180
-
-        # Generate equivalent pans within the allowed range
-        equivalent_pans = [target_pan_normalized + k * 360 for k in range(-1, 2)]
-        valid_pans = [pan for pan in equivalent_pans if pan_min <= pan <= pan_max]
-
-        if not valid_pans:
-            raise ValueError(f"No valid pan found for target_pan {target_pan}° within range ({pan_min}°, {pan_max}°)")
-
-        # Select the pan closest to the current pan
-        nearest_pan = min(valid_pans, key=lambda pan: abs(pan - current_pan))
-
-        logging.info(f"Current Pan: {current_pan}°, Target Pan: {target_pan}°, Nearest Pan: {nearest_pan}°")
-        return nearest_pan
-
 
 
     @staticmethod

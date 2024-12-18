@@ -145,8 +145,5 @@ class EOS(object):
     def predict(self, target_x, target_y, reference_point1: tuple, reference_point2: tuple, reference_point3: tuple, reference_point4: tuple, stage_max_y):
         predictor = PanTiltPredictor([reference_point1, reference_point2, reference_point3, reference_point4])
 
-        print(f"Target: {target_x}, {target_y}")
-        print(f"Reference points: {reference_point1}, {reference_point2}, {reference_point3}, {reference_point4}")
-        print(f"Stage max y: {stage_max_y}")
         pan, tilt = predictor.predict_pan_tilt(target_x, self.invert_y(target_y, stage_max_y))
         return pan, tilt

@@ -96,7 +96,7 @@ class LightControlApp:
             else:
                 time.sleep(0.2)
 
-    async def websocket_handler(self, websocket, path):
+    async def websocket_handler(self, websocket):
         logging.info("WebSocket connection established.")
         try:
             async for message in websocket:

@@ -178,8 +178,43 @@ class EOS(object):
 
         pan, tilt = self.predict(x, y, reference_point1, reference_point2, reference_point3, reference_point4, stage_max_y)
         print(f"Pan: {pan}, Tilt: {tilt}")
-        self.set_pan(channel, 0, self._get_nearest_pan(channel,pan), use_degrees=True)
+        pan, tilt = self._get_nearest_pan_tilt(channel, pan, tilt)
+        self.set_pan(channel, 0, pan, use_degrees=True)
         self.set_tilt(channel, 0, tilt, use_degrees=True)
+
+    def _get_nearest_pan_tilt(self, channel: int, target_pan: float, target_tilt: float) -> tuple:
+            pan_min, pan_max = self.get_pan_range(str(channel))
+            tilt_min, tilt_max = self.get_tilt_range(str(channel))
+            current_pan = self.current_data.get(channel, {}).get("pan", 0.0)
+            current_tilt = self.current_data.get(channel, {}).get("tilt", 0.0)
+
+            equivalents = [(target_pan, target_tilt)]
+            if target_pan > 90 or target_pan < -90:
+                adjusted_pan = target_pan - 180 if target_pan > 90 else target_pan + 180
+                adjusted_tilt = -target_tilt
+                equivalents.append((adjusted_pan, adjusted_tilt))
+
+            all_equivalents = []
+            for p, t in equivalents:
+                for k in range(-1, 2):
+                    p_equiv = p + k * 360
+                    all_equivalents.append((p_equiv, t))
+
+            valid_pans_tilts = [
+                (p, t) for p, t in all_equivalents
+                if pan_min <= p <= pan_max and tilt_min <= t <= tilt_max
+            ]
+
+            if not valid_pans_tilts:
+                raise ValueError(f"No valid pan/tilt found for target_pan {target_pan}° and target_tilt {target_tilt}° within pan range ({pan_min}°, {pan_max}°) and tilt range ({tilt_min}°, {tilt_max}°)")
+
+            nearest_pan_tilt = min(
+                valid_pans_tilts,
+                key=lambda pt: abs(pt[0] - current_pan) + abs(pt[1] - current_tilt)
+            )
+
+            logging.info(f"Current Pan: {current_pan}°, Current Tilt: {current_tilt}°, Target Pan: {target_pan}°, Target Tilt: {target_tilt}°, Nearest Pan: {nearest_pan_tilt[0]}°, Nearest Tilt: {nearest_pan_tilt[1]}°")
+            return nearest_pan_tilt
 
     def _get_nearest_pan(self, channel: int, target_pan: float) -> float:
         pan_min, pan_max = self.get_pan_range(str(channel))

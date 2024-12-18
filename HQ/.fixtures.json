@@ -1,0 +1,14 @@
+{
+    "2": {
+        "max_tilt": 115,
+        "min_tilt": -115,
+        "max_pan": 270,
+        "min_pan": -270
+    },
+    "1": {
+        "max_tilt": 115,
+        "min_tilt": -115,
+        "max_pan": 270,
+        "min_pan": 0
+    }
+}

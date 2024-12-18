@@ -340,8 +340,8 @@ class SensorGUI(QtWidgets.QWidget):
             self,
             "Set Scale",
             "Enter scale (inches per foot):",
-            decimals=4,
-            min=0.0001,
+            decimals=3,
+            min=0.25,
         )
         if ok and scale > 0:
             self.scale_factor = scale

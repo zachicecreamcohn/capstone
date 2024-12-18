@@ -4,9 +4,7 @@ import json
 import os
 from PanTiltPredictor import PanTiltPredictor
 
-# Fixture data with pan and tilt ranges
 
-current_data = {}
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -22,6 +20,8 @@ class EOS(object):
         self.sensor_data= {1:{1:{"pan":0.0,"tilt":0.0, "direction": 1}, 2:{"pan":0.0,"tilt":0.0, "direction": 1}, 3:{"pan":0.0,"tilt":0.0, "direction": 1}, 4:{"pan":0.0,"tilt":0.0, "direction": 1}}}
         self.fixtures_file = fixtures_file
         self.fixture_data = self.load_fixtures()
+        self.fixture_positions = {}
+        self.current_data = {}
 
     def load_fixtures(self):
         """
@@ -91,10 +91,10 @@ class EOS(object):
                 pan_min, pan_max = self.get_pan_range(channel_str)
                 actual_pan_value = self._convert_value(move_value, use_degrees, pan_min, pan_max, current_value)
                 self.set_parameter(channel, "pan", actual_pan_value)
-                if channel not in current_data:
-                    current_data[channel] = {}
+                if channel not in self.current_data:
+                    self.current_data[channel] = {}
 
-                current_data[channel]["pan"] = actual_pan_value
+                self.current_data[channel]["pan"] = actual_pan_value
             else:
                 raise ValueError(f"Channel '{channel}' not found in fixture_data.")
 
@@ -104,18 +104,18 @@ class EOS(object):
             tilt_min, tilt_max = self.get_tilt_range(channel_str)
             actual_tilt_value = self._convert_value(move_value, use_degrees, tilt_min, tilt_max, current_value)
             self.set_parameter(channel, "tilt", actual_tilt_value)
-            if channel not in current_data:
-                current_data[channel] = {}
+            if channel not in self.current_data:
+                self.current_data[channel] = {}
 
-            current_data[channel]["tilt"] = actual_tilt_value
+            self.current_data[channel]["tilt"] = actual_tilt_value
         else:
             raise ValueError(f"Channel '{channel}' not found in fixture_data.")
 
     def get_pan(self, channel: int) -> float:
-        return current_data[channel]["pan"]
+        return self.current_data[channel]["pan"]
 
     def get_tilt(self, channel: int) -> float:
-        return current_data[channel]["tilt"]
+        return self.current_data[channel]["tilt"]
 
     def set_sensor_data(self, sensor_id: int, pan: float, tilt: float, direction: int, channel) -> None:
 
@@ -178,8 +178,30 @@ class EOS(object):
 
         pan, tilt = self.predict(x, y, reference_point1, reference_point2, reference_point3, reference_point4, stage_max_y)
         print(f"Pan: {pan}, Tilt: {tilt}")
-        self.set_pan(channel, 0, pan, use_degrees=True)
+        self.set_pan(channel, 0, self._get_nearest_pan(channel,pan), use_degrees=True)
         self.set_tilt(channel, 0, tilt, use_degrees=True)
+
+    def _get_nearest_pan(self, channel: int, target_pan: float) -> float:
+        pan_min, pan_max = self.get_pan_range(str(channel))
+        current_pan = self.current_data.get(channel, {}).get("pan", 0.0)
+
+        # Normalize target_pan to be within -180° to +180°
+        target_pan_normalized = ((target_pan + 180) % 360) - 180
+
+        # Generate equivalent pans within the allowed range
+        equivalent_pans = [target_pan_normalized + k * 360 for k in range(-1, 2)]
+        valid_pans = [pan for pan in equivalent_pans if pan_min <= pan <= pan_max]
+
+        if not valid_pans:
+            raise ValueError(f"No valid pan found for target_pan {target_pan}° within range ({pan_min}°, {pan_max}°)")
+
+        # Select the pan closest to the current pan
+        nearest_pan = min(valid_pans, key=lambda pan: abs(pan - current_pan))
+
+        logging.info(f"Current Pan: {current_pan}°, Target Pan: {target_pan}°, Nearest Pan: {nearest_pan}°")
+        return nearest_pan
+
+
 
     @staticmethod
     def invert_y(y, max_y):

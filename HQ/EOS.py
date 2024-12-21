@@ -2,7 +2,7 @@ from pythonosc import udp_client
 import logging
 import json
 import os
-from PanTiltPredictor import PanTiltPredictor
+from pan_tilt_predictor import PanTiltPredictor
 
 
 
